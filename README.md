@@ -38,7 +38,7 @@ One JSON string, `schema_version: 1`:
 - `metadata`: title, state, draft, merged, author, URL, base and head (ref, SHA, repository), counts, body (stripped, cut at 4 KiB).
 - `diff`: a frozen comparison `base...head` from GitHub's compare API with `base_sha`, `merge_base_sha`, `head_sha` and per-file patches. It is not a verbatim unified diff: GitHub lists at most 300 files and omits patches for binary and very large files (`patch_unavailable`, never an empty patch).
 - `ci.workflows`: every Actions run for the SHA (distinct run IDs, not collapsed by workflow name), with its latest attempt and, for failed runs, the failed jobs and steps.
-- `ci.checks`: the latest check runs for the SHA, with the app that owns each. `ci.statuses`: the legacy combined status's contexts.
+- `ci.checks`: the latest check runs for the SHA, with the app that owns each. `ci.statuses`: the legacy combined status's contexts, with GitHub's own combined `state` kept as `combined_state_from_github` (it says `pending` when there are no statuses at all; the mod's `state` says `none`).
 - `ci.observed_outcome`: the overall state and counts (see below). `ci.required_checks` is always `"not_evaluated"`.
 - `logs.jobs`: for up to five failed jobs, the failed steps' log tails when attribution is reliable; otherwise `attribution: "step_logs_unavailable"` with a reason and two labelled fallbacks (below).
 - `omissions`: everything left out for a limit, with a count (or `"unknown"`) and the reason. `errors`: every failed command, classified (`not_found`, `auth`, `rate_limited`, `timeout`, `truncated`, `malformed`, `mismatch`, ...).
@@ -66,7 +66,7 @@ A run that changes (new attempt, new status) between discovery and the end of th
 `gh run view --log-failed` prints `job<TAB>step<TAB>line`. A failed step's tail (last 30 lines, at most 4 KiB) is returned only when every failed step's name is unique in the job and appears in the log, and no line is `UNKNOWN STEP`. Current GitHub logs often come back as `UNKNOWN STEP`; then the job gets `step_logs_unavailable` and:
 
 - `job_tail`: the last 30 lines of the whole failed-job log, labelled as such. Cleanup steps that ran after the failure (`Post ...`, credential removal) often fill it.
-- `error_marker_excerpt`: the lines from the last `##[group]Run` marker before GitHub's first `##[error]` marker up to that marker, and the `##[error]` lines themselves. These are GitHub's own markers, not a step attribution.
+- `error_marker_excerpt`: the lines from the last `##[group]Run` marker before GitHub's first `##[error]` marker up to that marker (its last 30 lines), and the first ten `##[error]` lines. These are GitHub's own markers, not a step attribution.
 
 A capture over 4 MiB, an expired log or a failed download gives no tail at all. Timestamps are removed from log lines, lines are cut at 400 characters, and terminal control sequences are stripped from logs, patches and PR text.
 
@@ -118,6 +118,8 @@ Cut from this first version, on purpose:
 - No secret masking: logs are returned as GitHub serves them (GitHub masks registered secrets itself).
 - A snapshot can't prove nothing changed between its reads; it re-reads run headers once at the end and reports what changed.
 - `gh` rate limiting is reported, not retried.
+- The workspace shorthand relies on `gh pr view`'s own lookup of the PR for the current branch.
+- A diff, log or body cut for a limit makes `collection` `partial`, like a failed section; read `omissions` and `errors` to tell them apart.
 
 ## Install
 

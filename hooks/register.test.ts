@@ -746,4 +746,49 @@ describe('coverage ledger', () => {
     expect({ wf: env.ci.workflows.complete, collection: env.collection, e: env.errors.length, o: env.omissions.length }).toEqual({ wf: false, collection: 'partial', e: 0, o: 1 })
     expect(env.omissions[0]).toMatchObject({ section: 'ci.workflows', reason: 'ceiling_runs' })
   })
+
+  test('L1: the recheck reports a run for another head_sha as a mismatch, like the first read', async ($, on) => {
+    const w = world(on)
+    await start($)
+    bareCommit(w.gh)
+    w.gh(A.runs(REPO, HEAD), { json: F.runs([F.run({ id: 11 })]) }, { json: F.runs([F.run({ id: 11 }), F.run({ id: 12, head: OTHER })]) })
+    const env = await call($, { repo: REPO, sha: HEAD, sections: ['ci'] })
+    expect({ wf: env.ci.workflows.state, outcome: env.ci.observed_outcome.state, collection: env.collection, errors: env.errors.map((e: any) => [e.section, e.step, e.kind]), omissions: env.omissions })
+      .toEqual({ wf: 'inconclusive', outcome: 'inconclusive', collection: 'partial', errors: [['ci.workflows', 'runs_recheck', 'mismatch']], omissions: [] })
+  })
+
+  test('L1b: the recheck reports a malformed run header instead of dropping it silently', async ($, on) => {
+    const w = world(on)
+    await start($)
+    bareCommit(w.gh)
+    const bad = { ...F.run({ id: 12, conclusion: 'failure' }), run_attempt: null }
+    w.gh(A.runs(REPO, HEAD), { json: F.runs([F.run({ id: 11 })]) }, { json: F.runs([F.run({ id: 11 }), bad]) })
+    const env = await call($, { repo: REPO, sha: HEAD, sections: ['ci'] })
+    expect({ outcome: env.ci.observed_outcome.state, collection: env.collection, errors: env.errors.map((e: any) => [e.section, e.step, e.kind]), omissions: env.omissions.length })
+      .toEqual({ outcome: 'inconclusive', collection: 'partial', errors: [['ci.workflows', 'runs_recheck', 'malformed']], omissions: 0 })
+  })
+
+  test('L3: a job the parser cannot read is reported, never dropped silently from a failed run', async ($, on) => {
+    const w = world(on)
+    await start($)
+    bareCommit(w.gh)
+    w.gh(A.runs(REPO, HEAD), { json: F.runs([F.run({ id: 12, conclusion: 'failure' })]) })
+    const j = { ...F.job({ id: 5, runId: 12 }), id: '5' }
+    w.gh(A.jobs(REPO, 12, 1), { json: F.jobs([j]) })
+    const env = await call($, { repo: REPO, sha: HEAD, sections: ['ci', 'logs'] })
+    expect({ failed_jobs: env.ci.workflows.runs[0].failed_jobs, logs: env.logs, collection: env.collection, errors: env.errors.map((e: any) => [e.section, e.step, e.kind]), omissions: env.omissions.length })
+      .toEqual({ failed_jobs: [], logs: { status: 'ok', jobs: [] }, collection: 'partial', errors: [['ci.workflows', 'jobs', 'malformed']], omissions: 0 })
+  })
+
+  test('unreadable PR list items and search hits are reported, not skipped', async ($, on) => {
+    const w = world(on)
+    await start($)
+    bareCommit(w.gh)
+    w.gh(A.commitPulls(REPO, HEAD), { json: [{ number: 'x' }] })
+    w.gh(A.searchPrs(REPO, HEAD), { json: { total_count: 1, incomplete_results: false, items: [{ title: 'no number' }] } })
+    const env = await call($, { repo: REPO, sha: HEAD, sections: ['metadata'] })
+    expect(env.errors.map((e: any) => [e.section, e.step, e.kind])).toEqual([['metadata', 'associated_prs', 'malformed'], ['metadata', 'search_prs', 'malformed']])
+    expect(env.metadata.association.complete).toBe(false)
+  })
 })
+

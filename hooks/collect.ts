@@ -68,6 +68,23 @@ async function runJson(ctx: Ctx, section: string, step: string, a: string[], opt
   return j
 }
 
+/**
+ * Parses each item of a list payload; every item it can't read is recorded as a
+ * `malformed` error rather than skipped, so nothing leaves a list silently.
+ */
+function parseItems<T>(ctx: Ctx, section: string, step: string, items: readonly unknown[], parse: (v: unknown) => T | null, what: string): { items: T[]; dropped: number } {
+  const out: T[] = []
+  let dropped = 0
+  items.forEach((v, i) => {
+    const p = parse(v)
+    if (p === null) {
+      dropped++
+      ctx.errors.push({ section, step, kind: 'malformed', message: `${what} ${i + 1} of the list could not be read` })
+    } else out.push(p)
+  })
+  return { items: out, dropped }
+}
+
 function fail(ctx: Ctx, section: string, step: string, kind: string, message: string): Fail {
   ctx.errors.push({ section, step, kind, message })
   return { ok: false, kind, message }
@@ -145,9 +162,9 @@ async function resolve(ctx: Ctx, req: Request, identity: Envelope['identity']): 
   if (pulls.ok && !Array.isArray(pulls.value)) fail(ctx, 'metadata', 'associated_prs', 'malformed', 'commits/{sha}/pulls is not a list')
   else if (pulls.ok) {
     pullsOk = true
-    for (const item of pulls.value as unknown[]) {
-      const f = pullFacts(item)
-      if (!f) continue
+    const parsed = parseItems(ctx, 'metadata', 'associated_prs', pulls.value as unknown[], pullFacts, 'pull request')
+    if (parsed.dropped > 0) complete = false
+    for (const f of parsed.items) {
       known.add(f.number)
       if (f.headSha === sha && f.baseRepo.toLowerCase() === repo.toLowerCase()) heads.add(f.number)
     }
@@ -163,7 +180,9 @@ async function resolve(ctx: Ctx, req: Request, identity: Envelope['identity']): 
       complete = false
       ctx.omissions.push({ section: 'metadata', what: 'PR search results', count: hits.total > hits.items.length ? hits.total - hits.items.length : 'unknown', reason: 'search_incomplete' })
     }
-    const fresh = hits.items.map(i => (isObj(i) && typeof i.number === 'number' ? i.number : null)).filter((x): x is number => x !== null && !known.has(x))
+    const numbers = parseItems(ctx, 'metadata', 'search_prs', hits.items, i => (isObj(i) && typeof i.number === 'number' && Number.isSafeInteger(i.number) ? i.number : null), 'search hit')
+    if (numbers.dropped > 0) complete = false
+    const fresh = numbers.items.filter(x => !known.has(x))
     const check = fresh.slice(0, CEILINGS.searchConfirmations)
     if (fresh.length > check.length) {
       complete = false
@@ -227,15 +246,13 @@ async function collectCi(ctx: Ctx, repo: string, sha: string, wantLogs: boolean)
   let initialCut = false
   if (list) {
     runsTotal = list.total
-    for (const item of list.items.slice(0, CEILINGS.runs)) {
-      const h = runHeader(item)
-      if (!h) {
-        fail(ctx, 'ci.workflows', 'runs', 'malformed', 'a workflow run without id or run_attempt')
-        runsError = true
-      } else if (h.headSha !== sha) fail(ctx, 'ci.workflows', 'runs', 'mismatch', `run ${h.id} is for ${h.headSha}, not ${sha}`)
+    const parsed = parseItems(ctx, 'ci.workflows', 'runs', list.items.slice(0, CEILINGS.runs), runHeader, 'workflow run')
+    if (parsed.dropped > 0) runsError = true
+    for (const h of parsed.items) {
+      if (h.headSha !== sha) fail(ctx, 'ci.workflows', 'runs', 'mismatch', `run ${h.id} is for ${h.headSha}, not ${sha}`)
       else headers.push(h)
     }
-    if (runsTotal > headers.length) {
+    if (runsTotal > list.items.length) {
       initialCut = true
       ctx.omissions.push({ section: 'ci.workflows', what: 'workflow runs beyond the first page', count: runsTotal - list.items.length, reason: 'ceiling_runs' })
     }
@@ -258,9 +275,7 @@ async function collectCi(ctx: Ctx, repo: string, sha: string, wantLogs: boolean)
     }
     if (jl.total > jl.items.length) ctx.omissions.push({ section: 'ci.workflows', what: `jobs of run ${h.id} beyond the first page`, count: jl.total - jl.items.length, reason: 'ceiling_jobs_per_run' })
     const jobs: JobFacts[] = []
-    for (const item of jl.items) {
-      const f = jobFacts(item)
-      if (!f) continue
+    for (const f of parseItems(ctx, 'ci.workflows', 'jobs', jl.items, jobFacts, `job of run ${h.id}`).items) {
       if (f.runId !== h.id || f.attempt !== h.attempt || f.headSha !== sha) {
         fail(ctx, 'ci.workflows', 'jobs', 'mismatch', `job ${f.id} is run ${f.runId} attempt ${f.attempt} at ${f.headSha}, expected run ${h.id} attempt ${h.attempt} at ${sha}`)
         continue
@@ -308,6 +323,8 @@ async function collectCi(ctx: Ctx, repo: string, sha: string, wantLogs: boolean)
   let final: RunHeader[] | null = null
   let finalComplete = false
   let recheckFailed = false
+  // Items of the final read that were reported (malformed or another SHA) rather than used.
+  let recheckUnreadable = false
   if (headers.length > 0 && !runsError) {
     const again = await runJson(ctx, 'ci.workflows', 'runs_recheck', argv.runs(repo, sha))
     const l2 = again.ok ? listOf(again.value, 'workflow_runs') : null
@@ -315,9 +332,14 @@ async function collectCi(ctx: Ctx, repo: string, sha: string, wantLogs: boolean)
     if (!l2) recheckFailed = true
     else {
       final = []
-      for (const item of l2.items.slice(0, CEILINGS.runs)) {
-        const h = runHeader(item)
-        if (h && h.headSha === sha) final.push(h)
+      const parsed = parseItems(ctx, 'ci.workflows', 'runs_recheck', l2.items.slice(0, CEILINGS.runs), runHeader, 'workflow run')
+      if (parsed.dropped > 0) recheckUnreadable = true
+      for (const h of parsed.items) {
+        if (h.headSha === sha) final.push(h)
+        else {
+          recheckUnreadable = true
+          fail(ctx, 'ci.workflows', 'runs_recheck', 'mismatch', `run ${h.id} is for ${h.headSha}, not ${sha}`)
+        }
       }
       finalComplete = l2.total <= l2.items.length && l2.items.length <= CEILINGS.runs
       if (!finalComplete && !initialCut) {
@@ -365,7 +387,7 @@ async function collectCi(ctx: Ctx, repo: string, sha: string, wantLogs: boolean)
     for (const r of notInspected) byReason.set(r.reason, (byReason.get(r.reason) ?? 0) + 1)
     for (const [reason, count] of byReason) ctx.omissions.push({ section: 'logs', what: 'failed runs whose jobs and logs were not collected', count, reason })
   }
-  const runsComplete = !runsError && !recheckFailed && unlisted === 0 && (final !== null ? finalComplete : runsTotal <= headers.length)
+  const runsComplete = !runsError && !recheckFailed && !recheckUnreadable && unlisted === 0 && (final !== null ? finalComplete : runsTotal <= headers.length)
   workflows = {
     ...sectionState({ error: runsError || recheckFailed, total: runsTotal, classes: runs.map(r => r.class as Cls), complete: runsComplete }, 'workflows'),
     total_count: runsTotal,

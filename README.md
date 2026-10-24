@@ -41,7 +41,7 @@ One JSON string, `schema_version: 1`:
 - `ci.checks`: the latest check runs for the SHA, with the app that owns each. `ci.statuses`: the legacy combined status's contexts, with GitHub's own combined `state` kept as `combined_state_from_github` (it says `pending` when there are no statuses at all; the mod's `state` says `none`).
 - `ci.observed_outcome`: the overall state and counts (see below). `ci.required_checks` is always `"not_evaluated"`.
 - `logs.jobs`: for up to five failed jobs, the failed steps' log tails when attribution is reliable; otherwise `attribution: "step_logs_unavailable"` with a reason and two labelled fallbacks (below).
-- `omissions`: everything left out for a limit, with a count (or `"unknown"`) and the reason. `errors`: every failed command, classified (`not_found`, `auth`, `rate_limited`, `timeout`, `truncated`, `malformed`, `mismatch`, ...).
+- `omissions`: everything left out for a limit, with a count (or `"unknown"`) and the reason. `errors`: every failed command, classified (`not_found`, `auth`, `rate_limited`, `timeout`, `truncated`, `malformed`, `mismatch`, ...), and every list item GitHub returned that couldn't be used: an unreadable run, job, PR or search hit is `malformed`, and a run or job for another commit or attempt is `mismatch`. Nothing is dropped from a list without an entry here, and either makes its section incomplete.
 
 ### Outcome rules
 

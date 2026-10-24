@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { bytesOf, coverageGaps, fitEnvelope, shapeDiff, withCollection } from './envelope'
+import { COVERAGE_MARKERS, bytesOf, coverageGaps, fitEnvelope, shapeDiff, unlistedMarkers, withCollection } from './envelope'
 import type { Envelope, Omission } from './envelope'
 
 const H = 'a1'.repeat(20)
@@ -150,6 +150,19 @@ describe('coverageGaps reads every truncation marker', () => {
     e.logs.jobs = [{ attribution: 'step_logs_unavailable', reason: 'unknown_step', job_tail: { lines: [], cut: false } }]
     e.ci.workflows.runs = [{ id: 1, listing: 'listed', changed_during_collection: true }]
     expect(coverageGaps(e)).toEqual([])
+  })
+})
+
+describe('marker inventory contract', () => {
+  test('a marker-like field that COVERAGE_MARKERS does not list is reported', async () => {
+    const e = envelope({ logs: { status: 'ok', jobs: [{ job_id: 1, lines_truncated: true, steps: [{ name: 's', cut: false, partial_tail: true }] }] } }) as any
+    e.diff.files[0].patch_omitted = true
+    expect(unlistedMarkers(e).sort()).toEqual(['diff.files.0.patch_omitted', 'logs.jobs.0.lines_truncated', 'logs.jobs.0.steps.0.partial_tail'])
+  })
+  test('every listed marker is itself recognised as marker-like or deliberately listed', async () => {
+    const e = envelope() as any
+    for (const k of Object.keys(COVERAGE_MARKERS)) e.metadata[k] = null
+    expect(unlistedMarkers(e)).toEqual([])
   })
 })
 

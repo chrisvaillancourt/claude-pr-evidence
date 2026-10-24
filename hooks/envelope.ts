@@ -367,8 +367,25 @@ export const COVERAGE_MARKERS: Readonly<Record<string, (v: unknown, parent: O) =
   /** A log entry's reason: a cut or failed capture, not an unavailable attribution. */
   reason: (v, parent) => parent.attribution !== undefined && typeof v === 'string' && (v === 'capture_truncated' || v === 'logs_unavailable' || v.startsWith('log_fetch_')),
   files_total: (v, parent) => typeof v === 'number' && typeof parent.files_listed === 'number' && v > parent.files_listed,
-  /** Supported states that are not gaps; listed so the contract test knows them. */
+  /** Supported states that are not gaps, and counterparts read by another rule; listed so the contract test knows them. */
   changed_during_collection: () => false,
+  files_listed: () => false,
+}
+
+/** Field names that look like a truncation or partial marker. */
+export const MARKER_NAME = /(^|_)(cut|truncated|complete|incomplete|omitted|not_inspected|unavailable|listing|listed|partial|dropped)(_|$)/
+
+/**
+ * Marker-like fields in the envelope's sections that COVERAGE_MARKERS doesn't
+ * list, by path: each is a cut or gap coverageGaps would never see. The contract
+ * tests require this to be empty for every result the suite produces.
+ */
+export function unlistedMarkers(env: Envelope): string[] {
+  const out: string[] = []
+  walkSections(env, (o, path) => {
+    for (const k of Object.keys(o)) if (MARKER_NAME.test(k) && !Object.hasOwn(COVERAGE_MARKERS, k)) out.push([...path, k].join('.'))
+  })
+  return out
 }
 
 /** The ledger section a path in the envelope belongs to. */

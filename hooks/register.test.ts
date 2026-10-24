@@ -2,6 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import * as F from './fixtures'
+import { unlistedMarkers } from './envelope'
 import { argv as A, isReadOnlyArgv } from './gh'
 
 const TOOL = 'mcp__pr-evidence__pr_evidence'
@@ -75,6 +76,9 @@ async function call($: any, input: Record<string, unknown>): Promise<any> {
   if (env.logs?.runs_not_inspected) gaps.push('logs')
   for (const run of env.ci?.workflows?.runs ?? []) if (run.jobs_not_inspected) gaps.push(`run ${run.id}`)
   if (env.collection === 'complete' && gaps.length > 0) throw new Error(`INVARIANT: collection complete but ${gaps.join(',')} incomplete`)
+  // The marker inventory contract: every truncation or partial marker in a real result is one coverageGaps reads.
+  const unlisted = unlistedMarkers(env)
+  if (unlisted.length > 0) throw new Error(`CONTRACT: markers missing from COVERAGE_MARKERS: ${unlisted.join(', ')}`)
   return env
 }
 
@@ -930,6 +934,7 @@ describe('review repro corpus', () => {
         omissions: env.omissions.map((o: any) => `${o.section}:${o.reason}`),
       }
       expect([name, got]).toEqual([name, expected])
+      expect([name, unlistedMarkers(env)]).toEqual([name, []])
     }
   })
 })

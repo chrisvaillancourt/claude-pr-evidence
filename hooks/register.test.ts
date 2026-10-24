@@ -806,3 +806,84 @@ describe('coverage ledger', () => {
   })
 })
 
+type W = ReturnType<typeof world>
+type Ledger = { collection: string; errors: string[]; omissions: string[] }
+/** Every review repro so far, with the exact ledger it must produce. */
+const REPROS: [string, (w: W) => void, Record<string, unknown>, Ledger][] = [
+  ['R1#1 successful-only rerun is rechecked', w => {
+    bareCommit(w.gh)
+    w.gh(A.runs(REPO, HEAD), { json: F.runs([F.run({ id: 11 })]) }, { json: F.runs([F.run({ id: 11, attempt: 2, status: 'in_progress', conclusion: null })]) })
+  }, { repo: REPO, sha: HEAD, sections: ['ci'] }, { collection: 'complete', errors: [], omissions: [] }],
+  ['R1#3 output-only cut', w => {
+    const patch = (i: number) => `@@ -1 +1 @@\n+${String(i).repeat(7980)}`
+    w.gh(A.pull(REPO, 7), { json: F.pull({ changed_files: 3 }) })
+    w.gh(A.compare(REPO, BASE, HEAD), { json: F.compare({ files: [0, 1, 2].map(i => ({ filename: `f${i}.go`, status: 'modified', additions: 1, deletions: 0, changes: 1, patch: patch(i) })) }) })
+  }, { repo: REPO, pr: 7, sections: ['metadata', 'diff'] }, { collection: 'partial', errors: [], omissions: ['diff:ceiling_output_bytes'] }],
+  ['R1#3 truncated log capture', w => {
+    bareCommit(w.gh)
+    w.gh(A.runs(REPO, HEAD), { json: F.runs([F.run({ id: 11, conclusion: 'failure' })]) })
+    w.gh(A.jobs(REPO, 11, 1), { json: F.jobs([F.job({ id: 101, runId: 11 })]) })
+    w.gh(A.log(REPO, 11, 1, 101), { text: F.logText('test', [['Run tests', 'FAIL']]), truncated: true })
+  }, { repo: REPO, sha: HEAD, sections: ['ci', 'logs'] }, { collection: 'partial', errors: ['logs:log:truncated'], omissions: [] }],
+  ['R1#4 closed, unmerged PR found by search', w => {
+    bareCommit(w.gh)
+    w.gh(A.searchPrs(REPO, HEAD), { json: F.search([8]) })
+    w.gh(A.pull(REPO, 8), { json: { ...F.pull({ number: 8 }), state: 'closed' } })
+  }, { repo: REPO, sha: HEAD, sections: ['metadata'] }, { collection: 'complete', errors: [], omissions: [] }],
+  // The corpus runs at maxOutputKiB 16 (the R1#3 row needs it), so the 100-run rows are also cut by the final fit.
+  ['R2#1 failure pushed off a full final page, jobs 502', w => {
+    bareCommit(w.gh)
+    const first = [...Array.from({ length: 99 }, (_, i) => F.run({ id: i + 1 })), F.run({ id: 100, conclusion: 'failure' })]
+    const second = [F.run({ id: 101 }), ...Array.from({ length: 99 }, (_, i) => F.run({ id: i + 1 }))]
+    w.gh(A.runs(REPO, HEAD), { json: F.runs(first, 100) }, { json: F.runs(second, 101) })
+    w.gh(A.jobs(REPO, 100, 1), { exit: 1, stderr: 'gh: Server Error (HTTP 502)' })
+  }, { repo: REPO, sha: HEAD, sections: ['ci'] }, { collection: 'partial', errors: ['ci.workflows:jobs:http_error'], omissions: ['ci.workflows:ceiling_runs', 'ci.workflows:run_list_changed_during_collection', 'ci.workflows:jobs_unavailable', 'ci.workflows:ceiling_output_bytes'] }],
+  ['R2#2 run first fails during the recheck, logs requested', w => {
+    bareCommit(w.gh)
+    w.gh(A.runs(REPO, HEAD), { json: F.runs([F.run({ id: 11, status: 'in_progress', conclusion: null })]) }, { json: F.runs([F.run({ id: 11, conclusion: 'failure' })]) })
+  }, { repo: REPO, sha: HEAD, sections: ['ci', 'logs'] }, { collection: 'partial', errors: [], omissions: ['ci.workflows:failed_during_collection', 'logs:failed_during_collection'] }],
+  ['R3#1 truncated final list, nothing displaced', w => {
+    bareCommit(w.gh)
+    w.gh(A.runs(REPO, HEAD), { json: F.runs([F.run({ id: 1 })]) }, { json: F.runs(Array.from({ length: 100 }, (_, i) => F.run({ id: i + 1 })), 101) })
+  }, { repo: REPO, sha: HEAD, sections: ['ci'] }, { collection: 'partial', errors: [], omissions: ['ci.workflows:ceiling_runs', 'ci.workflows:ceiling_output_bytes'] }],
+  ['L1 recheck lists a run for another head_sha', w => {
+    bareCommit(w.gh)
+    w.gh(A.runs(REPO, HEAD), { json: F.runs([F.run({ id: 11 })]) }, { json: F.runs([F.run({ id: 11 }), F.run({ id: 12, head: OTHER })]) })
+  }, { repo: REPO, sha: HEAD, sections: ['ci'] }, { collection: 'partial', errors: ['ci.workflows:runs_recheck:mismatch'], omissions: [] }],
+  ['L1b recheck lists a malformed run header', w => {
+    bareCommit(w.gh)
+    w.gh(A.runs(REPO, HEAD), { json: F.runs([F.run({ id: 11 })]) }, { json: F.runs([F.run({ id: 11 }), { ...F.run({ id: 12, conclusion: 'failure' }), run_attempt: null }]) })
+  }, { repo: REPO, sha: HEAD, sections: ['ci'] }, { collection: 'partial', errors: ['ci.workflows:runs_recheck:malformed'], omissions: [] }],
+  ['L2 unreadable pulls/N for a search hit', w => {
+    bareCommit(w.gh)
+    w.gh(A.searchPrs(REPO, HEAD), { json: F.search([9]) })
+    w.gh(A.pull(REPO, 9), { json: { message: 'not a pull' } })
+  }, { repo: REPO, sha: HEAD, sections: ['metadata'] }, { collection: 'partial', errors: ['metadata:pull:malformed'], omissions: [] }],
+  ['L3 unreadable job of a failed run', w => {
+    bareCommit(w.gh)
+    w.gh(A.runs(REPO, HEAD), { json: F.runs([F.run({ id: 12, conclusion: 'failure' })]) })
+    w.gh(A.jobs(REPO, 12, 1), { json: F.jobs([{ ...F.job({ id: 5, runId: 12 }), id: '5' }]) })
+  }, { repo: REPO, sha: HEAD, sections: ['ci', 'logs'] }, { collection: 'partial', errors: ['ci.workflows:jobs:malformed'], omissions: [] }],
+  ['L4 ci only, run failed during collection', w => {
+    bareCommit(w.gh)
+    w.gh(A.runs(REPO, HEAD), { json: F.runs([F.run({ id: 11, status: 'in_progress', conclusion: null })]) }, { json: F.runs([F.run({ id: 11, conclusion: 'failure' })]) })
+  }, { repo: REPO, sha: HEAD, sections: ['ci'] }, { collection: 'partial', errors: [], omissions: ['ci.workflows:failed_during_collection'] }],
+]
+
+describe('review repro corpus', () => {
+  test('every repro produces its exact ledger', { options: { maxOutputKiB: 16 } }, async ($, on) => {
+    const w = world(on)
+    await start($)
+    for (const [name, arrange, input, expected] of REPROS) {
+      arrange(w)
+      const env = await call($, input)
+      const got: Ledger = {
+        collection: env.collection,
+        errors: env.errors.map((e: any) => `${e.section}:${e.step}:${e.kind}`),
+        omissions: env.omissions.map((o: any) => `${o.section}:${o.reason}`),
+      }
+      expect([name, got]).toEqual([name, expected])
+    }
+  })
+})
+

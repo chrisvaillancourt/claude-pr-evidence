@@ -34,7 +34,7 @@ One JSON string, `schema_version: 1`:
 
 - `identity`: `host` (`github.com`), `repo`, `sha`, `pr` (or null), `resolved_by`.
 - `observed`: `started_at` and `finished_at`. A snapshot never claims CI has settled; another run can still appear.
-- `collection`: `complete`, `partial` or `error`, decided last, after the final size fit. `error`: resolution failed, nothing below it is evidence. `partial`: any entry in `errors` or `omissions` (a failed command, a truncated capture, anything cut for a limit). `complete`: neither.
+- `collection`: `complete`, `partial` or `error`, decided last, after the final size fit. `error`: resolution failed, nothing below it is evidence. `partial`: any entry in `errors` or `omissions` (a failed command, a truncated capture, anything cut for a limit), or any section that reports itself incomplete. `complete`: none of these. Every incomplete section has a reason in `errors` or `omissions`; one the mod didn't anticipate is reported as `unaccounted_gap`.
 - `metadata`: title, state, draft, merged, author, URL, base and head (ref, SHA, repository), counts, body (stripped, cut at 4 KiB).
 - `diff`: a frozen comparison `base...head` from GitHub's compare API with `base_sha`, `merge_base_sha`, `head_sha` and per-file patches. It is not a verbatim unified diff: GitHub lists at most 300 files and omits patches for binary and very large files (`patch_unavailable`, never an empty patch).
 - `ci.workflows`: every Actions run for the SHA (distinct run IDs, not collapsed by workflow name), with its latest attempt and, for failed runs, the failed jobs and steps.

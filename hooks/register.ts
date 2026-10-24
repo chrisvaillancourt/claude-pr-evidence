@@ -104,7 +104,8 @@ async function serve($: EngineInterface, e: Record<string, unknown>, signal: Abo
   // Checked again right before returning: an off switch flipped during the last command wins.
   if (!(await active($))) return { deny: 'pr-evidence was turned off during collection; no evidence returned.' }
 
-  const fitted = withCollection(fitEnvelope(env, config.maxOutputKiB * 1024))
+  // Gaps are accounted before the fit (so their errors are inside the size limit) and collection derived again after it.
+  const fitted = withCollection(fitEnvelope(withCollection(env), config.maxOutputKiB * 1024))
   const outcome = (fitted.ci.observed_outcome as { state?: string } | undefined)?.state ?? 'none'
   log($, `${fitted.identity.repo ?? '?'}@${(fitted.identity.sha ?? '?').slice(0, 12)}: ${fitted.collection}, ci ${outcome}, ${deps.count()} commands, ${fitted.errors.length} errors`)
   return { result: JSON.stringify(fitted) }

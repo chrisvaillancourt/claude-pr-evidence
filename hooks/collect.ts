@@ -224,6 +224,7 @@ async function collectCi(ctx: Ctx, repo: string, sha: string, wantLogs: boolean)
   const list = got.ok ? listOf(got.value, 'workflow_runs') : null
   if (got.ok && list === null) fail(ctx, 'ci.workflows', 'runs', 'malformed', 'actions/runs is not a workflow run list')
   let runsError = !got.ok || list === null
+  let initialCut = false
   if (list) {
     runsTotal = list.total
     for (const item of list.items.slice(0, CEILINGS.runs)) {
@@ -234,7 +235,10 @@ async function collectCi(ctx: Ctx, repo: string, sha: string, wantLogs: boolean)
       } else if (h.headSha !== sha) fail(ctx, 'ci.workflows', 'runs', 'mismatch', `run ${h.id} is for ${h.headSha}, not ${sha}`)
       else headers.push(h)
     }
-    if (runsTotal > headers.length) ctx.omissions.push({ section: 'ci.workflows', what: 'workflow runs beyond the first page', count: runsTotal - list.items.length, reason: 'ceiling_runs' })
+    if (runsTotal > headers.length) {
+      initialCut = true
+      ctx.omissions.push({ section: 'ci.workflows', what: 'workflow runs beyond the first page', count: runsTotal - list.items.length, reason: 'ceiling_runs' })
+    }
   }
 
   // Jobs of failed runs, for their latest attempt.
@@ -316,6 +320,9 @@ async function collectCi(ctx: Ctx, repo: string, sha: string, wantLogs: boolean)
         if (h && h.headSha === sha) final.push(h)
       }
       finalComplete = l2.total <= l2.items.length && l2.items.length <= CEILINGS.runs
+      if (!finalComplete && !initialCut) {
+        ctx.omissions.push({ section: 'ci.workflows', what: 'workflow runs beyond the first page of the final read', count: Math.max(0, l2.total - Math.min(l2.items.length, CEILINGS.runs)), reason: 'ceiling_runs' })
+      }
       runsTotal = Math.max(runsTotal, l2.total)
     }
   }

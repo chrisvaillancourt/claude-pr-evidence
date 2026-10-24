@@ -341,12 +341,51 @@ export function fitEnvelope(input: Envelope, maxBytes: number): Envelope {
   return env
 }
 
+export type Gap = { section: string; what: string }
+
+/**
+ * Every place the envelope reports itself incomplete: a CI section with
+ * `complete: false`, an association with `complete: false`, runs whose jobs or
+ * logs weren't inspected, a requested section in `error`. Read from the
+ * envelope itself, not from the collector's bookkeeping.
+ */
+export function coverageGaps(env: Envelope): Gap[] {
+  const gaps: Gap[] = []
+  for (const k of ['metadata', 'diff', 'ci', 'logs'] as const) {
+    if ((env[k] as O).status === 'error') gaps.push({ section: k, what: `${k} is in error` })
+  }
+  for (const k of ['workflows', 'checks', 'statuses'] as const) {
+    const sec = env.ci[k] as O | undefined
+    if (isObj(sec) && sec.complete === false) gaps.push({ section: `ci.${k}`, what: `ci.${k} reports itself incomplete` })
+  }
+  if (isObj(env.metadata.association) && env.metadata.association.complete === false) {
+    gaps.push({ section: 'metadata', what: 'the PR association reports itself incomplete' })
+  }
+  const runs = isObj(env.ci.workflows) && Array.isArray(env.ci.workflows.runs) ? (env.ci.workflows.runs as O[]) : []
+  const uninspected = runs.filter(r => r.jobs_not_inspected !== undefined).length
+  if (uninspected > 0) gaps.push({ section: 'ci.workflows', what: `${uninspected} failed runs have no jobs inspected` })
+  if (Array.isArray(env.logs.runs_not_inspected) && env.logs.runs_not_inspected.length > 0) {
+    gaps.push({ section: 'logs', what: 'failed runs have no logs collected' })
+  }
+  return gaps
+}
+
 /**
  * The envelope's `collection`, derived last, after every shaping step and the
- * final fit: `error` (resolution failed) stays; any error or omission (a failed
- * command, a truncated capture, a cut for any limit) is `partial`; else `complete`.
+ * final fit, never asserted by the collector. `error` (resolution failed) stays;
+ * any error, omission or coverage gap is `partial`; else `complete`. A gap whose
+ * section has no error or omission explaining it gets an `unaccounted_gap` error,
+ * so every gap has a ledger reason. Idempotent.
  */
 export function withCollection(env: Envelope): Envelope {
-  const collection = env.collection === 'error' ? 'error' : env.errors.length > 0 || env.omissions.length > 0 ? 'partial' : 'complete'
-  return { ...env, collection }
+  const accounted = (section: string) =>
+    [...env.errors, ...env.omissions].some(x => x.section === section || x.section.startsWith(`${section}.`))
+  const extra: ErrorEntry[] = []
+  for (const g of coverageGaps(env)) {
+    if (accounted(g.section) || extra.some(x => x.section === g.section)) continue
+    extra.push({ section: g.section, step: 'coverage', kind: 'unaccounted_gap', message: `${g.what} and no error or omission says why` })
+  }
+  const errors = extra.length > 0 ? [...env.errors, ...extra] : env.errors
+  const collection = env.collection === 'error' ? 'error' : errors.length > 0 || env.omissions.length > 0 ? 'partial' : 'complete'
+  return { ...env, errors, collection }
 }

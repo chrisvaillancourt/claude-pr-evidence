@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { bytesOf, fitEnvelope, shapeDiff } from './envelope'
+import { bytesOf, coverageGaps, fitEnvelope, shapeDiff, withCollection } from './envelope'
 import type { Envelope, Omission } from './envelope'
 
 const H = 'a1'.repeat(20)
@@ -77,5 +77,45 @@ describe('shapeDiff', () => {
     expect(files[1].patch.length).toBeLessThanOrEqual(8 * 1024)
     expect(omissions).toContainEqual({ section: 'diff', what: 'files not listed by the compare API', count: 3, reason: 'github_compare_file_limit' })
     expect(shapeDiff({ files: [] }, { base: B, head: H, changedFiles: 0 }, [])).toBe(null)
+  })
+})
+
+describe('completeness is derived, never asserted', () => {
+  const sec = (complete: boolean) => ({ state: complete ? 'passed' : 'inconclusive', complete, has_pending: false, counts: { passed: 1, neutral: 0, failed: 0, pending: 0, unknown: 0 } })
+  const base = (over: Partial<Envelope> = {}): Envelope =>
+    envelope({ metadata: { status: 'ok' }, diff: { status: 'ok', files: [] }, logs: { status: 'ok', jobs: [] }, ci: { status: 'ok', workflows: { ...sec(true), runs: [] }, checks: sec(true), statuses: sec(true), required_checks: 'not_evaluated' }, ...over })
+
+  test('everything complete and an empty ledger is complete', async () => {
+    expect(coverageGaps(base())).toEqual([])
+    expect(withCollection(base()).collection).toBe('complete')
+  })
+
+  test('an incomplete section with an empty ledger is partial, with an unaccounted_gap error', async () => {
+    const e = base({ ci: { status: 'ok', workflows: { ...sec(false), runs: [] }, checks: sec(true), statuses: sec(true), required_checks: 'not_evaluated' } })
+    const out = withCollection(e)
+    expect(out.collection).toBe('partial')
+    expect(out.errors).toEqual([{ section: 'ci.workflows', step: 'coverage', kind: 'unaccounted_gap', message: 'ci.workflows reports itself incomplete and no error or omission says why' }])
+  })
+
+  test('a gap its section already accounts for adds nothing', async () => {
+    const e = base({ ci: { status: 'ok', workflows: { ...sec(false), runs: [] }, checks: sec(true), statuses: sec(true), required_checks: 'not_evaluated' }, omissions: [{ section: 'ci.workflows', what: 'x', count: 1, reason: 'ceiling_runs' }] })
+    const out = withCollection(e)
+    expect(out.errors).toEqual([])
+    expect(out.collection).toBe('partial')
+  })
+
+  test('every kind of gap is found', async () => {
+    const e = base({
+      metadata: { status: 'no_pr_found', association: { complete: false } },
+      diff: { status: 'error' },
+      logs: { status: 'ok', jobs: [], runs_not_inspected: [{ run_id: 1 }] },
+      ci: { status: 'ok', workflows: { ...sec(true), runs: [{ id: 1, jobs_not_inspected: 'failed_during_collection' }] }, checks: sec(false), statuses: sec(true), required_checks: 'not_evaluated' },
+    })
+    expect(coverageGaps(e).map(g => g.section).sort()).toEqual(['ci.checks', 'ci.workflows', 'diff', 'logs', 'metadata'])
+    expect(withCollection(withCollection(e)).errors.length).toBe(5)
+  })
+
+  test('error outranks partial', async () => {
+    expect(withCollection(base({ collection: 'error', ci: { status: 'not_collected' } })).collection).toBe('error')
   })
 })

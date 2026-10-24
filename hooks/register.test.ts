@@ -66,7 +66,16 @@ async function call($: any, input: Record<string, unknown>): Promise<any> {
   const r = await $.tool.call({ tool: TOOL, tool_use_id: 'tu1', ...input })
   if (r.deny !== undefined) return { deny: r.deny }
   expect(typeof r.result).toBe('string')
-  return JSON.parse(r.result)
+  const env = JSON.parse(r.result)
+  // The completeness invariant, checked on every end-to-end result: complete
+  // only when every collected section reports itself complete.
+  const gaps: string[] = []
+  for (const k of ['workflows', 'checks', 'statuses']) if (env.ci?.[k] && env.ci[k].complete === false) gaps.push(`ci.${k}`)
+  if (env.metadata?.association?.complete === false) gaps.push('association')
+  if (env.logs?.runs_not_inspected) gaps.push('logs')
+  for (const run of env.ci?.workflows?.runs ?? []) if (run.jobs_not_inspected) gaps.push(`run ${run.id}`)
+  if (env.collection === 'complete' && gaps.length > 0) throw new Error(`INVARIANT: collection complete but ${gaps.join(',')} incomplete`)
+  return env
 }
 
 const NOT_FOUND = { exit: 1, stderr: 'gh: Not Found (HTTP 404)', stdout: '{"message":"Not Found","status":"404"}' }
@@ -723,5 +732,18 @@ describe('read-only', () => {
     const words = /\b(POST|PATCH|PUT|DELETE|rerun|cancel|dispatches|checkout|merge|login|logout)\b/
     expect(everyArgv.filter(a => a.some(x => words.test(x)) || (a[1] === 'api' && !a.includes('GET')))).toEqual([])
     expect(everyArgv.filter(a => a[0] === 'gh' && a[1] === 'workflow')).toEqual([])
+  })
+})
+
+describe('coverage ledger', () => {
+  test('R3 repro: a truncated final run list with no run displaced is an omission', async ($, on) => {
+    const w = world(on)
+    await start($)
+    bareCommit(w.gh)
+    const all = Array.from({ length: 100 }, (_, i) => F.run({ id: i + 1 }))
+    w.gh(A.runs(REPO, HEAD), { json: F.runs([F.run({ id: 1 })]) }, { json: F.runs(all, 101) })
+    const env = await call($, { repo: REPO, sha: HEAD, sections: ['ci'] })
+    expect({ wf: env.ci.workflows.complete, collection: env.collection, e: env.errors.length, o: env.omissions.length }).toEqual({ wf: false, collection: 'partial', e: 0, o: 1 })
+    expect(env.omissions[0]).toMatchObject({ section: 'ci.workflows', reason: 'ceiling_runs' })
   })
 })

@@ -1,0 +1,13 @@
+{
+  "name": "pr-evidence",
+  "owner": {
+    "name": "Chris Vaillancourt"
+  },
+  "plugins": [
+    {
+      "name": "pr-evidence",
+      "source": "./"
+    }
+  ],
+  "description": "Reads a pull request's diff, its CI status for an exact commit and the failed jobs' logs, as one model-callable tool."
+}

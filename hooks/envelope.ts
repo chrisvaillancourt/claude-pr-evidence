@@ -340,3 +340,13 @@ export function fitEnvelope(input: Envelope, maxBytes: number): Envelope {
   }
   return env
 }
+
+/**
+ * The envelope's `collection`, derived last, after every shaping step and the
+ * final fit: `error` (resolution failed) stays; any error or omission (a failed
+ * command, a truncated capture, a cut for any limit) is `partial`; else `complete`.
+ */
+export function withCollection(env: Envelope): Envelope {
+  const collection = env.collection === 'error' ? 'error' : env.errors.length > 0 || env.omissions.length > 0 ? 'partial' : 'complete'
+  return { ...env, collection }
+}

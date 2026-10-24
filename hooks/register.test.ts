@@ -493,6 +493,40 @@ describe('bounds', () => {
     expect(env.metadata.body_truncated).toBe(true)
   })
 
+  test('cuts made only by the final fit make the collection partial (review repro)', { options: { maxOutputKiB: 16 } }, async ($, on) => {
+    const w = world(on)
+    await start($)
+    const patch = (i: number) => `@@ -1 +1 @@\n+${String(i).repeat(7980)}`
+    w.gh(A.pull(REPO, 7), { json: F.pull({ changed_files: 3 }) })
+    w.gh(A.compare(REPO, BASE, HEAD), { json: F.compare({ files: [0, 1, 2].map(i => ({ filename: `f${i}.go`, status: 'modified', additions: 1, deletions: 0, changes: 1, patch: patch(i) })) }) })
+    const env = await call($, { repo: REPO, pr: 7, sections: ['metadata', 'diff'] })
+    expect(env.omissions.map((o: any) => o.reason)).toEqual(['ceiling_output_bytes'])
+    expect(env.collection).toBe('partial')
+  })
+
+  test('a truncated log capture is an error and makes the collection partial', async ($, on) => {
+    const w = world(on)
+    await start($)
+    bareCommit(w.gh)
+    const r = [F.run({ id: 11, conclusion: 'failure' })]
+    w.gh(A.runs(REPO, HEAD), { json: F.runs(r) })
+    w.gh(A.jobs(REPO, 11, 1), { json: F.jobs([F.job({ id: 101, runId: 11 })]) })
+    w.gh(A.log(REPO, 11, 1, 101), { text: F.logText('test', [['Run tests', 'FAIL']]), truncated: true })
+    const env = await call($, { repo: REPO, sha: HEAD, sections: ['ci', 'logs'] })
+    expect(env.logs.jobs[0]).toMatchObject({ attribution: 'step_logs_unavailable', reason: 'capture_truncated' })
+    expect(env.errors).toContainEqual({ section: 'logs', step: 'log', kind: 'truncated', message: 'output passed the 4 MiB capture limit and was cut' })
+    expect(env.collection).toBe('partial')
+    expect(env.ci.observed_outcome.state).toBe('failing')
+  })
+
+  test('error outranks partial', async ($, on) => {
+    const w = world(on)
+    await start($)
+    w.gh(A.commit(REPO, OTHER), { exit: 1, stderr: `gh: No commit found for SHA: ${OTHER} (HTTP 422)` })
+    const env = await call($, { repo: REPO, sha: OTHER })
+    expect(env.collection).toBe('error')
+  })
+
   test('terminal controls are stripped from PR text, patches and logs', async ($, on) => {
     const w = world(on)
     await start($)

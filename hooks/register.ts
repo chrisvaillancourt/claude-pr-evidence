@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import { collect } from './collect'
 import type { Deps, RunOutcome } from './collect'
-import { fitEnvelope } from './envelope'
+import { fitEnvelope, withCollection } from './envelope'
 import { GH_ENV, isReadOnlyArgv } from './gh'
 import { CEILINGS, INITIAL, USAGE, configFrom, isActive, parseArgs, statusText, validateInput } from './policy'
 import type { Config } from '../types'
@@ -104,7 +104,7 @@ async function serve($: EngineInterface, e: Record<string, unknown>, signal: Abo
   // Checked again right before returning: an off switch flipped during the last command wins.
   if (!(await active($))) return { deny: 'pr-evidence was turned off during collection; no evidence returned.' }
 
-  const fitted = fitEnvelope(env, config.maxOutputKiB * 1024)
+  const fitted = withCollection(fitEnvelope(env, config.maxOutputKiB * 1024))
   const outcome = (fitted.ci.observed_outcome as { state?: string } | undefined)?.state ?? 'none'
   log($, `${fitted.identity.repo ?? '?'}@${(fitted.identity.sha ?? '?').slice(0, 12)}: ${fitted.collection}, ci ${outcome}, ${deps.count()} commands, ${fitted.errors.length} errors`)
   return { result: JSON.stringify(fitted) }

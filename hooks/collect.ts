@@ -47,7 +47,11 @@ async function runText(ctx: Ctx, section: string, step: string, a: string[], opt
     const c = classifyResult(o.r)
     if (c.ok) return { ok: true, value: { text: c.stdout, truncated: false } }
     // A log's truncation is the log parser's to judge; everything else is an error.
-    if (c.kind === 'truncated' && step === 'log') return { ok: true, value: { text: o.r.stdout, truncated: true } }
+    // It is still recorded as an error: the log is incomplete evidence.
+    if (c.kind === 'truncated' && step === 'log') {
+      ctx.errors.push({ section, step, kind: c.kind, message: c.message })
+      return { ok: true, value: { text: o.r.stdout, truncated: true } }
+    }
     f = c
   }
   ctx.errors.push({ section, step, kind: f.kind, message: f.message })
@@ -367,7 +371,6 @@ export async function collect(req: Request, deps: Deps): Promise<Envelope> {
     env.ci = c.ci
     env.logs = c.logs
   }
-  if (ctx.errors.length > 0 || ctx.omissions.length > 0) env.collection = 'partial'
   return finish(env, deps)
 }
 

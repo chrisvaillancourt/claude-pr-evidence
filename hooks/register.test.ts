@@ -790,5 +790,16 @@ describe('coverage ledger', () => {
     expect(env.errors.map((e: any) => [e.section, e.step, e.kind])).toEqual([['metadata', 'associated_prs', 'malformed'], ['metadata', 'search_prs', 'malformed']])
     expect(env.metadata.association.complete).toBe(false)
   })
+
+  test('L2: a search hit whose pulls/N payload is unreadable is reported where it happened', async ($, on) => {
+    const w = world(on)
+    await start($)
+    bareCommit(w.gh)
+    w.gh(A.searchPrs(REPO, HEAD), { json: F.search([9]) })
+    w.gh(A.pull(REPO, 9), { json: { message: 'not a pull' } })
+    const env = await call($, { repo: REPO, sha: HEAD, sections: ['metadata'] })
+    expect({ status: env.metadata.status, assoc: env.metadata.association.complete, collection: env.collection, errors: env.errors.map((e: any) => [e.section, e.step, e.kind]), omissions: env.omissions.length })
+      .toEqual({ status: 'no_pr_found', assoc: false, collection: 'partial', errors: [['metadata', 'pull', 'malformed']], omissions: 0 })
+  })
 })
 

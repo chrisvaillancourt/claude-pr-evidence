@@ -192,6 +192,8 @@ async function resolve(ctx: Ctx, req: Request, identity: Envelope['identity']): 
       const got = await runJson(ctx, 'metadata', 'pull', argv.pull(repo, n))
       const f = got.ok ? pullFacts(got.value) : null
       if (!f) {
+        // A failed command is already in errors; an unreadable payload is recorded here.
+        if (got.ok) fail(ctx, 'metadata', 'pull', 'malformed', `pulls/${n} (a search hit) is not a pull request payload`)
         complete = false
         continue
       }

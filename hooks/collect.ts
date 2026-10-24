@@ -339,6 +339,25 @@ async function collectCi(ctx: Ctx, repo: string, sha: string, wantLogs: boolean)
     if (jr) r.failed_jobs = jr.jobs.filter(isFailedJob).map(shapeFailedJob)
     return r
   })
+  // Every run that is failed in the merged set but has no jobs collected for its
+  // final attempt gets a reason, on the run and (when logs were asked for) in logs.
+  const inspectedIds = new Set(inspected.map(h => h.id))
+  const initialFailed = new Set(failedRuns.map(h => h.id))
+  const notInspected: { run_id: number; run_attempt: number; reason: string }[] = []
+  for (let k = 0; k < merged.length; k++) {
+    const m = merged[k]!
+    if (runs[k]!.class !== 'failed' || jobsByRun.has(m.header.id)) continue
+    const reason = m.changed || !initialFailed.has(m.header.id)
+      ? 'failed_during_collection'
+      : inspectedIds.has(m.header.id) ? 'jobs_unavailable' : 'ceiling_failed_runs_inspected'
+    runs[k]!.jobs_not_inspected = reason
+    notInspected.push({ run_id: m.header.id, run_attempt: m.header.attempt, reason })
+  }
+  if (wantLogs) {
+    const byReason = new Map<string, number>()
+    for (const r of notInspected) byReason.set(r.reason, (byReason.get(r.reason) ?? 0) + 1)
+    for (const [reason, count] of byReason) ctx.omissions.push({ section: 'logs', what: 'failed runs whose jobs and logs were not collected', count, reason })
+  }
   const runsComplete = !runsError && !recheckFailed && unlisted === 0 && (final !== null ? finalComplete : runsTotal <= headers.length)
   workflows = {
     ...sectionState({ error: runsError || recheckFailed, total: runsTotal, classes: runs.map(r => r.class as Cls), complete: runsComplete }, 'workflows'),
@@ -356,7 +375,9 @@ async function collectCi(ctx: Ctx, repo: string, sha: string, wantLogs: boolean)
     required_checks: 'not_evaluated',
   }
   const kept = logEntries.filter(l => !changed.has(l.runId)).map(l => l.entry)
-  return { ci, logs: wantLogs ? { status: 'ok', jobs: kept } : { status: 'not_requested' } }
+  const logs: Envelope['logs'] = { status: 'ok', jobs: kept }
+  if (notInspected.length > 0) logs.runs_not_inspected = notInspected.map(r => ({ repo, sha, ...r }))
+  return { ci, logs: wantLogs ? logs : { status: 'not_requested' } }
 }
 
 function classifyConclusionOf(h: RunHeader): Cls {

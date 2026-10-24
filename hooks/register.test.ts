@@ -395,6 +395,30 @@ describe('identity', () => {
 })
 
 describe('reruns', () => {
+  test('a run that first fails during the recheck is marked: no jobs or logs were collected for it (review repro)', async ($, on) => {
+    const w = world(on)
+    await start($)
+    bareCommit(w.gh)
+    w.gh(A.runs(REPO, HEAD), { json: F.runs([F.run({ id: 11, status: 'in_progress', conclusion: null })]) }, { json: F.runs([F.run({ id: 11, conclusion: 'failure' })]) })
+    const env = await call($, { repo: REPO, sha: HEAD, sections: ['ci', 'logs'] })
+    expect(env.ci.observed_outcome.state).toBe('failing')
+    expect(env.ci.workflows.runs[0]).toMatchObject({ id: 11, class: 'failed', jobs_not_inspected: 'failed_during_collection' })
+    expect(env.logs.runs_not_inspected).toEqual([{ repo: REPO, sha: HEAD, run_id: 11, run_attempt: 1, reason: 'failed_during_collection' }])
+    expect(env.omissions).toContainEqual({ section: 'logs', what: 'failed runs whose jobs and logs were not collected', count: 1, reason: 'failed_during_collection' })
+    expect(env.collection).toBe('partial')
+    expect(w.seen.argv.filter(a => a[6]?.endsWith('/jobs')).length).toBe(0)
+  })
+
+  test('without logs requested, a late failure is marked on the run only', async ($, on) => {
+    const w = world(on)
+    await start($)
+    bareCommit(w.gh)
+    w.gh(A.runs(REPO, HEAD), { json: F.runs([F.run({ id: 11, status: 'in_progress', conclusion: null })]) }, { json: F.runs([F.run({ id: 11, conclusion: 'failure' })]) })
+    const env = await call($, { repo: REPO, sha: HEAD, sections: ['ci'] })
+    expect(env.ci.workflows.runs[0].jobs_not_inspected).toBe('failed_during_collection')
+    expect(env.logs).toEqual({ status: 'not_requested' })
+  })
+
   test('a failure pushed off a full final page stays visible (review repro: 101 runs, jobs 502)', async ($, on) => {
     const w = world(on)
     await start($)
@@ -525,6 +549,8 @@ describe('bounds', () => {
     expect(env.logs.jobs.length).toBe(5)
     expect(env.omissions).toContainEqual({ section: 'ci.workflows', what: 'jobs of failed runs', count: 3, reason: 'ceiling_failed_runs_inspected' })
     expect(env.omissions).toContainEqual({ section: 'logs', what: 'failed job logs', count: 5, reason: 'ceiling_logs_fetched' })
+    expect((env.logs.runs_not_inspected ?? []).map((r: any) => [r.run_id, r.reason])).toEqual([[25, 'ceiling_failed_runs_inspected'], [26, 'ceiling_failed_runs_inspected'], [27, 'ceiling_failed_runs_inspected']])
+    expect(env.ci.workflows.runs.filter((r: any) => r.jobs_not_inspected).map((r: any) => r.id)).toEqual([25, 26, 27])
     expect(env.invocations).toBeLessThanOrEqual(30)
   })
 

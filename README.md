@@ -68,7 +68,9 @@ Whenever Actions runs were found, the snapshot reads the run list once more at t
 - `job_tail`: the last 30 lines of the whole failed-job log, labelled as such. Cleanup steps that ran after the failure (`Post ...`, credential removal) often fill it.
 - `error_marker_excerpt`: the lines from the last `##[group]Run` marker before GitHub's first `##[error]` marker up to that marker (its last 30 lines), and the first ten `##[error]` lines. These are GitHub's own markers, not a step attribution.
 
-A capture over 4 MiB, an expired log or a failed download gives no tail at all. Timestamps are removed from log lines, lines are cut at 400 characters, and terminal control sequences are stripped from logs, patches and PR text.
+A capture over 4 MiB, an expired log or a failed download gives no tail at all.
+
+A run that is failed in the final result but whose jobs weren't read for that attempt carries `jobs_not_inspected` with the reason: `failed_during_collection` (it failed, or was rerun, between the first and final reads), `ceiling_failed_runs_inspected` (past the five-run limit) or `jobs_unavailable` (the jobs request failed). When logs were requested, the same runs are listed in `logs.runs_not_inspected` and in `omissions`, so `collection` is `partial`. The snapshot doesn't go back for them; call the tool again. Timestamps are removed from log lines, lines are cut at 400 characters, and terminal control sequences are stripped from logs, patches and PR text.
 
 ## Limits
 

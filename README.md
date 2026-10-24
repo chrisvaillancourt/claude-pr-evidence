@@ -59,7 +59,7 @@ Classes: `success` passes; `neutral` and `skipped` are neutral; `failure`, `time
 
 The overall `ci.observed_outcome.state` is the first that applies: `failing` (any failure in any section), `pending`, `inconclusive`, `no_workflows` (no Actions runs, no check runs and no statuses), `skipped_only`, `observed_passed`. When there are no Actions runs but another app's check runs passed, the overall state is `observed_passed` and `ci.workflows.state` still says `no_workflows`.
 
-A run that changes (new attempt, new status) between discovery and the end of the snapshot is re-read: its final header is what counts, and jobs and logs collected for the older attempt are dropped and listed in `omissions`.
+Whenever Actions runs were found, the snapshot reads the run list once more at the end, after everything else. A run that changed (new attempt, new status) counts in its final state, marked `changed_during_collection`, and jobs and logs collected for its older attempt are dropped and listed in `omissions`. If that second read fails, the first can't be confirmed: `ci.workflows` is incomplete and the result is `inconclusive` unless something failed.
 
 ### Logs
 

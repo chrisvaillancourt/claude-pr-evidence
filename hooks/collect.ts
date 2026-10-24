@@ -228,12 +228,21 @@ async function collectCi(ctx: Ctx, repo: string, sha: string, wantLogs: boolean)
     }
   }
 
-  // Re-read run headers once: a run that changed invalidates what was read for its older state.
+  // Check runs and legacy statuses.
+  const checks = await listSection(ctx, 'ci.checks', 'check_runs', argv.checks(repo, sha), 'check_runs', checkItem, 'checks')
+  const statuses = await listSection(ctx, 'ci.statuses', 'status', argv.status(repo, sha), 'statuses', statusItem, 'statuses')
+
+  // Re-read run headers once, after everything else, whenever runs were found: a run
+  // that changed (a rerun started, a run finished) counts in its new state and
+  // invalidates what was read for its older one. A recheck that fails can't confirm
+  // the first read, so the section is incomplete (known failures still count).
   const changed = new Set<number>()
-  if (jobsByRun.size > 0 && !runsError) {
+  let recheckFailed = false
+  if (headers.length > 0 && !runsError) {
     const again = await runJson(ctx, 'ci.workflows', 'runs_recheck', argv.runs(repo, sha))
     const l2 = again.ok ? listOf(again.value, 'workflow_runs') : null
     if (again.ok && !l2) fail(ctx, 'ci.workflows', 'runs_recheck', 'malformed', 'actions/runs is not a workflow run list')
+    if (!l2) recheckFailed = true
     if (l2) {
       const before = new Map(headers.map(h => [h.id, h]))
       const fresh: RunHeader[] = []
@@ -264,14 +273,11 @@ async function collectCi(ctx: Ctx, repo: string, sha: string, wantLogs: boolean)
     return r
   })
   workflows = {
-    ...sectionState({ error: runsError, total: runsTotal, classes: runs.map(r => r.class as Cls), complete: !runsError && runsTotal <= runs.length }, 'workflows'),
+    ...sectionState({ error: runsError || recheckFailed, total: runsTotal, classes: runs.map(r => r.class as Cls), complete: !runsError && !recheckFailed && runsTotal <= runs.length }, 'workflows'),
     total_count: runsTotal,
     runs,
   }
 
-  // Check runs and legacy statuses.
-  const checks = await listSection(ctx, 'ci.checks', 'check_runs', argv.checks(repo, sha), 'check_runs', checkItem, 'checks')
-  const statuses = await listSection(ctx, 'ci.statuses', 'status', argv.status(repo, sha), 'statuses', statusItem, 'statuses')
 
   const ci: Envelope['ci'] = {
     status: 'ok',

@@ -361,6 +361,37 @@ describe('identity', () => {
 })
 
 describe('reruns', () => {
+  test('a successful-only snapshot is rechecked too: a rerun that started is pending, not passed', async ($, on) => {
+    const w = world(on)
+    await start($)
+    bareCommit(w.gh)
+    w.gh(A.runs(REPO, HEAD),
+      { json: F.runs([F.run({ id: 11 })]) },
+      { json: F.runs([F.run({ id: 11, attempt: 2, status: 'in_progress', conclusion: null })]) })
+    w.gh(A.checks(REPO, HEAD), { json: F.checks([F.check({ id: 1 })]) })
+    const env = await call($, { repo: REPO, sha: HEAD, sections: ['ci'] })
+    const reads = w.seen.argv.filter(a => a.join(' ') === A.runs(REPO, HEAD).join(' ')).length
+    expect({ state: env.ci.observed_outcome.state, reads }).toEqual({ state: 'pending', reads: 2 })
+    expect(env.ci.workflows.runs[0]).toMatchObject({ id: 11, run_attempt: 2, changed_during_collection: true })
+  })
+
+  test('a recheck that fails leaves the snapshot inconclusive, and a known failure stays visible', async ($, on) => {
+    const w = world(on)
+    await start($)
+    bareCommit(w.gh)
+    w.gh(A.runs(REPO, HEAD), { json: F.runs([F.run({ id: 11 })]) }, { exit: 1, stderr: 'gh: Server Error (HTTP 502)' })
+    w.gh(A.checks(REPO, HEAD), { json: F.checks([F.check({ id: 1 })]) })
+    const passedOnce = await call($, { repo: REPO, sha: HEAD, sections: ['ci'] })
+    expect(passedOnce.ci.observed_outcome.state).toBe('inconclusive')
+    expect(passedOnce.errors).toContainEqual(expect.objectContaining({ step: 'runs_recheck', kind: 'http_error' }))
+
+    bareCommit(w.gh)
+    w.gh(A.runs(REPO, HEAD), { json: F.runs([F.run({ id: 11 }), F.run({ id: 12, conclusion: 'failure' })]) }, { exit: 1, stderr: 'gh: Server Error (HTTP 502)' })
+    w.gh(A.jobs(REPO, 12, 1), { json: F.jobs([]) })
+    const failedOnce = await call($, { repo: REPO, sha: HEAD, sections: ['ci'] })
+    expect(failedOnce.ci.observed_outcome.state).toBe('failing')
+  })
+
   test('a run rerun during collection: its old-attempt jobs and logs are dropped, the new state counts', async ($, on) => {
     const w = world(on)
     await start($)

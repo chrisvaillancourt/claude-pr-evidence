@@ -8,10 +8,11 @@ A Claude Code mod (function-hook plugin). `README.md` is the user-facing spec; k
 - `hooks/gh.ts`: every argv the mod can run (builders only; nothing else constructs a command), the read-only allowlist `isReadOnlyArgv`, and classification of a finished `gh` call (`ok`, `not_found`, `auth`, `rate_limited`, `truncated`, `malformed`, ...). Pure.
 - `hooks/outcome.ts`: the outcome rules (README "Outcome rules"): conclusion classes and section and overall states. Pure.
 - `hooks/logs.ts`: the `gh run view --log-failed` parser: step attribution when it is reliable, the labelled fallbacks when it isn't. Pure, corpus-tested in `logs.test.ts`.
-- `hooks/envelope.ts`: shaping GitHub JSON into the result sections, terminal-control stripping, byte budgets and the final fit to `maxOutputKiB`. Pure.
+- `hooks/text.ts`: terminal-control stripping, UTF-8 byte counts, line and byte cuts. Pure.
+- `hooks/envelope.ts`: shaping GitHub JSON into the result sections, byte budgets and the final fit to `maxOutputKiB`. Pure.
 - `hooks/collect.ts`: one snapshot. Runs the planned `gh`/`git` calls through an injected runner (sequentially, counted against the invocation ceiling and the deadline) and assembles the envelope. Holds no `$` of its own.
 - `hooks/register.ts`: wiring: registers the tool and the command at `session.start`, serves `tool.call` for `mcp__pr-evidence__pr_evidence`, owns the runner over `$.process.run` and the off-switch checks.
-- `hooks/*.test.ts`: `policy`, `outcome`, `logs`, `envelope` unit and corpus tests; `register.test.ts` drives the tool end to end with a `process.run` bottom hook that answers from `hooks/fixtures.ts` (trimmed real `gh api` shapes with fake owners and SHAs).
+- `hooks/*.test.ts`: `policy`, `gh`, `outcome`, `logs` (with `text`), `envelope` unit and corpus tests; `register.test.ts` drives the tool end to end with a `process.run` bottom hook that answers from `hooks/fixtures.ts` (trimmed real `gh api` shapes with fake owners and SHAs).
 - `types/index.d.ts`: the mod's types and its `$.state` contract (`PluginState['pr-evidence']`). Every `$.state` key the module uses must be declared here.
 - `.claude-plugin/plugin.json`: manifest and `userConfig` options. `marketplace.json` makes the repo its own marketplace.
 - `scripts/check.sh`: the commit gate (validate, test, typecheck).
@@ -27,6 +28,7 @@ The README's "Contract" and "Outcome rules" sections are the spec. These hold fo
 - **A truncated capture is an error, not data.** `isStdoutTruncated` on JSON is an error; on a log it means no tail can be trusted.
 - **Logs are attributed to a step only when reliable** (`logs.ts`): every failed step's name is unique in the job and present in the log, and no line is `UNKNOWN STEP`. Otherwise `step_logs_unavailable`, with a job tail and an error-marker excerpt that are labelled as such.
 - **Bounded.** Ceilings live in `CEILINGS` (`policy.ts`); the result is always one valid JSON string within `maxOutputKiB`, fitted by dropping patches and log lines first and recording each drop in `omissions`. Never cut serialized JSON.
+- **Off is checked with a versioned `update`, not `read`,** before every command and before returning: a plain `read` returned the dispatch's snapshot in the test kit and missed an off switch flipped while a command ran.
 - **Stable tool list.** The tool is registered once per `session.start`, whatever the mode; off and subagent refusals happen in the handler. No cache, no watcher, no timers, no model calls.
 - **Untrusted text.** PR title and body, patches and logs have terminal control sequences stripped and are never interpreted.
 

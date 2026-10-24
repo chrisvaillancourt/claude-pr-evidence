@@ -7,8 +7,30 @@
     "enabled": {
       "type": "boolean",
       "title": "Enabled",
-      "description": "Turn the mod on for new sessions. /pr-evidence on|off overrides it for a session.",
+      "description": "Turn the pr_evidence tool on for new sessions. /pr-evidence on|off overrides it for a session.",
       "default": true
+    },
+    "allowSubagents": {
+      "type": "boolean",
+      "title": "Allow subagents",
+      "description": "Let subagents call pr_evidence too, with the same limits. Off: their calls are refused.",
+      "default": false
+    },
+    "timeoutSeconds": {
+      "type": "number",
+      "title": "Timeout (seconds)",
+      "description": "Deadline for one pr_evidence call, 10 to 600. Sections not reached by then are reported as not collected.",
+      "default": 120,
+      "min": 10,
+      "max": 600
+    },
+    "maxOutputKiB": {
+      "type": "number",
+      "title": "Largest result (KiB)",
+      "description": "Largest pr_evidence result, 16 to 64 KiB. Patches and log lines are dropped first, and every drop is listed.",
+      "default": 64,
+      "min": 16,
+      "max": 64
     }
   },
   "author": {

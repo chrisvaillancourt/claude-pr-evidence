@@ -868,6 +868,14 @@ const REPROS: [string, (w: W) => void, Record<string, unknown>, Ledger][] = [
     w.gh(A.runs(REPO, HEAD), { json: F.runs([F.run({ id: 12, conclusion: 'failure' })]) })
     w.gh(A.jobs(REPO, 12, 1), { json: F.jobs([{ ...F.job({ id: 5, runId: 12 }), id: '5' }]) })
   }, { repo: REPO, sha: HEAD, sections: ['ci', 'logs'] }, { collection: 'partial', errors: ['ci.workflows:jobs:malformed'], omissions: [] }],
+  ['R4 500-character line in an attributed step tail', w => failedJobLog(w, [['Run tests', 'x'.repeat(500)]]),
+    { repo: REPO, sha: HEAD, sections: ['ci', 'logs'] }, { collection: 'partial', errors: [], omissions: ['logs:ceiling_log_tail'] }],
+  ['R4 500-character line in the labelled job-tail fallback', w => failedJobLog(w, [['UNKNOWN STEP', 'y'.repeat(500)]]),
+    { repo: REPO, sha: HEAD, sections: ['ci', 'logs'] }, { collection: 'partial', errors: [], omissions: ['logs:ceiling_log_tail'] }],
+  ['R4 step longer than the 30-line tail', w => failedJobLog(w, Array.from({ length: 40 }, (_, i) => ['Run tests', `line ${i}`] as [string, string])),
+    { repo: REPO, sha: HEAD, sections: ['ci', 'logs'] }, { collection: 'partial', errors: [], omissions: ['logs:ceiling_log_tail'] }],
+  ['R4 unavailable attribution with nothing cut stays complete', w => failedJobLog(w, [['UNKNOWN STEP', 'short'], ['UNKNOWN STEP', '##[error]boom']]),
+    { repo: REPO, sha: HEAD, sections: ['ci', 'logs'] }, { collection: 'complete', errors: [], omissions: [] }],
   ['L4 ci only, run failed during collection', w => {
     bareCommit(w.gh)
     w.gh(A.runs(REPO, HEAD), { json: F.runs([F.run({ id: 11, status: 'in_progress', conclusion: null })]) }, { json: F.runs([F.run({ id: 11, conclusion: 'failure' })]) })

@@ -263,9 +263,7 @@ async function collectCi(ctx: Ctx, repo: string, sha: string, wantLogs: boolean)
   // Jobs of failed runs, for their latest attempt.
   const failedRuns = headers.filter(h => classifyConclusionOf(h) === 'failed')
   const inspected = failedRuns.slice(0, CEILINGS.failedRunsInspected)
-  if (failedRuns.length > inspected.length) {
-    ctx.omissions.push({ section: 'ci.workflows', what: 'jobs of failed runs', count: failedRuns.length - inspected.length, reason: 'ceiling_failed_runs_inspected' })
-  }
+  // Failed runs left uninspected (past this cap, or failed later) are recorded after the merge.
   const jobsByRun = new Map<number, { attempt: number; jobs: JobFacts[] }>()
   for (const h of inspected) {
     const j = await runJson(ctx, 'ci.workflows', 'jobs', argv.jobs(repo, h.id, h.attempt))
@@ -384,10 +382,12 @@ async function collectCi(ctx: Ctx, repo: string, sha: string, wantLogs: boolean)
     runs[k]!.jobs_not_inspected = reason
     notInspected.push({ run_id: m.header.id, run_attempt: m.header.attempt, reason })
   }
-  if (wantLogs) {
-    const byReason = new Map<string, number>()
-    for (const r of notInspected) byReason.set(r.reason, (byReason.get(r.reason) ?? 0) + 1)
-    for (const [reason, count] of byReason) ctx.omissions.push({ section: 'logs', what: 'failed runs whose jobs and logs were not collected', count, reason })
+  const byReason = new Map<string, number>()
+  for (const r of notInspected) byReason.set(r.reason, (byReason.get(r.reason) ?? 0) + 1)
+  for (const [reason, count] of byReason) {
+    // jobs_unavailable already has its error; the omission still says which runs lack jobs.
+    ctx.omissions.push({ section: 'ci.workflows', what: 'jobs of failed runs', count, reason })
+    if (wantLogs) ctx.omissions.push({ section: 'logs', what: 'failed runs whose jobs and logs were not collected', count, reason })
   }
   const runsComplete = !runsError && !recheckFailed && !recheckUnreadable && unlisted === 0 && (final !== null ? finalComplete : runsTotal <= headers.length)
   workflows = {

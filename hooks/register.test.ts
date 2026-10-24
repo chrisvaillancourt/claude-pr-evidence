@@ -418,7 +418,7 @@ describe('reruns', () => {
     expect(w.seen.argv.filter(a => a[6]?.endsWith('/jobs')).length).toBe(0)
   })
 
-  test('without logs requested, a late failure is marked on the run only', async ($, on) => {
+  test('without logs requested, a late failure is marked on the run and in omissions (L4)', async ($, on) => {
     const w = world(on)
     await start($)
     bareCommit(w.gh)
@@ -426,6 +426,9 @@ describe('reruns', () => {
     const env = await call($, { repo: REPO, sha: HEAD, sections: ['ci'] })
     expect(env.ci.workflows.runs[0].jobs_not_inspected).toBe('failed_during_collection')
     expect(env.logs).toEqual({ status: 'not_requested' })
+    expect(env.omissions).toEqual([{ section: 'ci.workflows', what: 'jobs of failed runs', count: 1, reason: 'failed_during_collection' }])
+    expect(env.errors).toEqual([])
+    expect(env.collection).toBe('partial')
   })
 
   test('a failure pushed off a full final page stays visible (review repro: 101 runs, jobs 502)', async ($, on) => {

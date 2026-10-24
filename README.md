@@ -24,7 +24,7 @@ Unknown fields are refused.
 ### Resolution
 
 - `repo` + `pr`: read the PR and pin its current head SHA. A `sha` that differs is an error.
-- `repo` + `sha`: check that the commit exists, then look for a PR whose current head is that SHA. One match gives metadata and diff; none or several are reported (`no_pr`, `ambiguous` with the candidate numbers) and CI is still collected for the SHA.
+- `repo` + `sha`: check that the commit exists, then look for a PR whose current head is that SHA. Candidates come from two sources, because neither is complete alone: `commits/{sha}/pulls` (open and merged PRs, but not every closed, unmerged one) and a search for PRs in the repository that contain the SHA (`search/issues`, which can lag new PRs). Each search hit is confirmed by reading the PR (at most five). One match gives metadata and diff; none is `no_pr_found`, several are `ambiguous` with the candidate numbers, and CI is still collected for the SHA either way. Both carry `association.complete`: false when a source failed or was cut short. Even `true` is not proof that no PR exists.
 - No fields (workspace shorthand): `gh pr view` for the current branch in the session's directory, and local `git rev-parse HEAD`. The repository comes from the PR's URL. Local HEAD must equal the PR's head: an unpushed or stale checkout is an error, not evidence for a different commit.
 - Anything else (`pr` or `sha` without `repo`, `repo` alone) is refused. There is no branch input.
 
@@ -89,11 +89,11 @@ Fixed ceilings: 30 process invocations per call, one at a time; each at most 20 
 
 ## Cost
 
-No model calls of its own. The result is a tool result the model reads, so it costs input tokens like any other: up to `maxOutputKiB` (64 KiB is roughly 16K tokens) per call. Each call uses your GitHub API rate limit: about 6 to 20 REST requests, plus log downloads.
+No model calls of its own. The result is a tool result the model reads, so it costs input tokens like any other: up to `maxOutputKiB` (64 KiB is roughly 16K tokens) per call. Each call uses your GitHub API rate limit: about 6 to 25 REST requests, plus log downloads. The repo+sha form also makes one search request, which counts against GitHub's separate search rate limit (30 a minute).
 
 ## Contract
 
-In scope: github.com; your existing `gh` authentication; one base repository; full 40-character SHAs; association by current PR head; frozen comparison patches; Actions runs, latest check runs and combined legacy statuses for the exact SHA; bounded failed-job logs, attributed to steps only when reliable.
+In scope: github.com; your existing `gh` authentication; one base repository; full 40-character SHAs; association by current PR head (best effort, see Resolution); frozen comparison patches; Actions runs, latest check runs and combined legacy statuses for the exact SHA; bounded failed-job logs, attributed to steps only when reliable.
 
 Out of contract:
 

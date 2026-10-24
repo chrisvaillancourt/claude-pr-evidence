@@ -15,6 +15,7 @@ export const CEILINGS = {
   jobsPerRun: 100,
   failedRunsInspected: 5,
   logsFetched: 5,
+  searchConfirmations: 5,
   logsBytes: 16 * 1024,
   diffBytes: 24 * 1024,
   patchBytes: 8 * 1024,

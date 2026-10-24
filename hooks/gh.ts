@@ -59,6 +59,7 @@ export const argv = {
   jobs: (r: string, run: number, attempt: number) => api(`repos/${repo(r)}/actions/runs/${id(run)}/attempts/${id(attempt)}/jobs`, { per_page: '100' }),
   checks: (r: string, s: string) => api(`repos/${repo(r)}/commits/${sha(s)}/check-runs`, { filter: 'latest', per_page: '100' }),
   status: (r: string, s: string) => api(`repos/${repo(r)}/commits/${sha(s)}/status`, { per_page: '100' }),
+  searchPrs: (r: string, s: string) => api('search/issues', { q: `repo:${repo(r)} is:pr ${sha(s)}`, per_page: '20' }),
   log: (r: string, run: number, attempt: number, job: number) =>
     ['gh', 'run', 'view', id(run), '--repo', `${HOST}/${repo(r)}`, '--attempt', id(attempt), '--job', id(job), '--log-failed'],
   workspacePr: () => ['gh', 'pr', 'view', '--json', 'number,url,headRefOid'],
@@ -71,6 +72,8 @@ const HEX = '[0-9a-f]{40}'
 const API_PATH = new RegExp(
   `^repos/${OWNER}/${NAME}/(?:pulls/\\d+|commits/${HEX}(?:/pulls|/check-runs|/status)?|compare/${HEX}\\.\\.\\.${HEX}|actions/runs|actions/runs/\\d+/attempts/\\d+/jobs)$`,
 )
+// The one search the mod runs: PRs in one repository that contain one full SHA.
+const SEARCH_Q = new RegExp(`^q=repo:${OWNER}/${NAME} is:pr ${HEX}$`)
 const FIELD = /^(?:head_sha=[0-9a-f]{40}|per_page=\d{1,3}|page=\d{1,3}|filter=latest)$/
 const LOG_REPO = new RegExp(`^${HOST.replace('.', '\\.')}/${OWNER}/${NAME}$`)
 const DIGITS = /^\d+$/
@@ -83,6 +86,7 @@ export function isReadOnlyArgv(a: readonly string[]): boolean {
   const eq = (i: number, v: string) => a[i] === v
   if (a[0] === 'gh' && a[1] === 'api') {
     if (!GET.every((v, i) => eq(i, v))) return false
+    if (a[6] === 'search/issues') return a.length === 11 && eq(7, '-f') && SEARCH_Q.test(a[8] ?? '') && eq(9, '-f') && eq(10, 'per_page=20')
     if (!API_PATH.test(a[6] ?? '')) return false
     let i = 7
     while (i < a.length && a[i] === '-f') {

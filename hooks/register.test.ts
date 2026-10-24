@@ -75,6 +75,7 @@ const NOT_FOUND = { exit: 1, stderr: 'gh: Not Found (HTTP 404)', stdout: '{"mess
 function bareCommit(gh: ReturnType<typeof world>['gh']) {
   gh(A.commit(REPO, HEAD), { text: `${HEAD}\n` })
   gh(A.commitPulls(REPO, HEAD), { json: [] })
+  gh(A.searchPrs(REPO, HEAD), { json: F.search([]) })
   gh(A.runs(REPO, HEAD), { json: F.runs([]) })
   gh(A.checks(REPO, HEAD), { json: F.checks([]) })
   gh(A.status(REPO, HEAD), { json: F.status([]) })
@@ -106,7 +107,7 @@ describe('outcome rules through the tool', () => {
     const env = await call($, { repo: REPO, sha: HEAD })
     expect(env.identity).toEqual({ host: 'github.com', repo: REPO, sha: HEAD, pr: null, resolved_by: 'repo+sha' })
     expect(env.collection).toBe('complete')
-    expect(env.metadata.status).toBe('no_pr')
+    expect(env.metadata).toMatchObject({ status: 'no_pr_found', association: { sources: ['commits/{sha}/pulls', 'search/issues'], complete: true } })
     expect(env.diff).toMatchObject({ status: 'not_collected' })
     expect(env.ci.workflows.state).toBe('no_workflows')
     expect(env.ci.statuses.state).toBe('none')
@@ -328,7 +329,7 @@ describe('identity', () => {
     bareCommit(w.gh)
     w.gh(A.commitPulls(REPO, HEAD), { json: [F.pull({ number: 7 }), F.pull({ number: 8 }), F.pull({ number: 9, head: OTHER })] })
     const env = await call($, { repo: REPO, sha: HEAD })
-    expect(env.metadata).toEqual({ status: 'ambiguous', candidates: [7, 8], reason: 'more than one open or closed PR has this commit as its current head' })
+    expect(env.metadata).toMatchObject({ status: 'ambiguous', candidates: [7, 8], reason: 'more than one open or closed PR has this commit as its current head', association: { complete: true } })
     expect(env.diff.status).toBe('not_collected')
     expect(env.identity.pr).toBe(null)
     expect(env.ci.observed_outcome.state).toBe('no_workflows')
@@ -344,6 +345,39 @@ describe('identity', () => {
     expect(env.identity.pr).toBe(7)
     expect(env.metadata.status).toBe('ok')
     expect(env.diff.status).toBe('ok')
+  })
+
+  test('a closed, unmerged PR that commits/{sha}/pulls misses is found by search and confirmed (review repro)', async ($, on) => {
+    const w = world(on)
+    await start($)
+    bareCommit(w.gh)
+    w.gh(A.searchPrs(REPO, HEAD), { json: F.search([8]) })
+    w.gh(A.pull(REPO, 8), { json: { ...F.pull({ number: 8 }), state: 'closed' } })
+    const env = await call($, { repo: REPO, sha: HEAD, sections: ['metadata'] })
+    expect(env.identity.pr).toBe(8)
+    expect(env.metadata).toMatchObject({ status: 'ok', number: 8, state: 'closed' })
+  })
+
+  test('a search hit whose current head is another commit is not used', async ($, on) => {
+    const w = world(on)
+    await start($)
+    bareCommit(w.gh)
+    w.gh(A.searchPrs(REPO, HEAD), { json: F.search([9]) })
+    w.gh(A.pull(REPO, 9), { json: F.pull({ number: 9, head: OTHER }) })
+    const env = await call($, { repo: REPO, sha: HEAD, sections: ['metadata'] })
+    expect(env.identity.pr).toBe(null)
+    expect(env.metadata).toMatchObject({ status: 'no_pr_found', association: { complete: true } })
+  })
+
+  test('a failed search makes the association incomplete, never a flat no-PR', async ($, on) => {
+    const w = world(on)
+    await start($)
+    bareCommit(w.gh)
+    w.gh(A.searchPrs(REPO, HEAD), { exit: 1, stderr: 'gh: API rate limit exceeded for user ID 1. (HTTP 403)' })
+    const env = await call($, { repo: REPO, sha: HEAD, sections: ['metadata'] })
+    expect(env.metadata).toMatchObject({ status: 'no_pr_found', association: { complete: false } })
+    expect(env.errors).toContainEqual(expect.objectContaining({ step: 'search_prs', kind: 'rate_limited' }))
+    expect(env.collection).toBe('partial')
   })
 
   test('a job whose sha or attempt differs is dropped as a mismatch', async ($, on) => {

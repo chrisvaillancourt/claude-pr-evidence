@@ -11,6 +11,7 @@ import type { Request } from './policy'
 import {
   bytesOf,
   checkItem,
+  isObj,
   isFailedJob,
   jobFacts,
   listOf,
@@ -129,18 +130,77 @@ async function resolve(ctx: Ctx, req: Request, identity: Envelope['identity']): 
   const commit = await runText(ctx, 'identity', 'resolve', argv.commit(repo, sha))
   if (!commit.ok) return null
   if (commit.value.text.trim() !== sha) return (fail(ctx, 'identity', 'resolve', 'mismatch', `GitHub resolved ${sha} to ${commit.value.text.trim() || 'nothing'}`), null)
+  // Which PR has this commit as its current head? commits/{sha}/pulls covers open
+  // and merged PRs but not every closed, unmerged one, so a search for PRs that
+  // contain the SHA adds candidates; each is confirmed by its own pulls/N read.
+  // Search is eventually consistent: even both sources together are not proof of absence.
+  const sources = ['commits/{sha}/pulls', 'search/issues']
+  let complete = true
+  const confirmed = new Map<number, unknown>()
+  const known = new Set<number>()
+  const heads = new Set<number>()
   const pulls = await runJson(ctx, 'metadata', 'associated_prs', argv.commitPulls(repo, sha))
-  if (!pulls.ok) return { repo, sha, pr: null, prNumber: null, metadata: { status: 'error', reason: 'could not list PRs for this commit' } }
-  if (!Array.isArray(pulls.value)) {
-    fail(ctx, 'metadata', 'associated_prs', 'malformed', 'commits/{sha}/pulls is not a list')
-    return { repo, sha, pr: null, prNumber: null, metadata: { status: 'error', reason: 'could not list PRs for this commit' } }
+  let pullsOk = false
+  if (pulls.ok && !Array.isArray(pulls.value)) fail(ctx, 'metadata', 'associated_prs', 'malformed', 'commits/{sha}/pulls is not a list')
+  else if (pulls.ok) {
+    pullsOk = true
+    for (const item of pulls.value as unknown[]) {
+      const f = pullFacts(item)
+      if (!f) continue
+      known.add(f.number)
+      if (f.headSha === sha && f.baseRepo.toLowerCase() === repo.toLowerCase()) heads.add(f.number)
+    }
   }
-  const heads = pulls.value.map(pullFacts).filter((f): f is NonNullable<typeof f> => f !== null && f.headSha === sha && f.baseRepo.toLowerCase() === repo.toLowerCase())
-  if (heads.length === 0) return { repo, sha, pr: null, prNumber: null, metadata: { status: 'no_pr', reason: 'no PR in this repository has this commit as its current head' } }
-  if (heads.length > 1) {
-    return { repo, sha, pr: null, prNumber: null, metadata: { status: 'ambiguous', candidates: heads.map(h => h.number), reason: 'more than one open or closed PR has this commit as its current head' } }
+  if (!pullsOk) complete = false
+  const found = await runJson(ctx, 'metadata', 'search_prs', argv.searchPrs(repo, sha))
+  const hits = found.ok ? listOf(found.value, 'items') : null
+  if (found.ok && !hits) fail(ctx, 'metadata', 'search_prs', 'malformed', 'search/issues is not a search result')
+  if (!hits) complete = false
+  if (!pullsOk && !hits) return { repo, sha, pr: null, prNumber: null, metadata: { status: 'error', reason: 'could not look up PRs for this commit' } }
+  if (hits) {
+    if ((found as { value: any }).value?.incomplete_results === true || hits.total > hits.items.length) {
+      complete = false
+      ctx.omissions.push({ section: 'metadata', what: 'PR search results', count: hits.total > hits.items.length ? hits.total - hits.items.length : 'unknown', reason: 'search_incomplete' })
+    }
+    const fresh = hits.items.map(i => (isObj(i) && typeof i.number === 'number' ? i.number : null)).filter((x): x is number => x !== null && !known.has(x))
+    const check = fresh.slice(0, CEILINGS.searchConfirmations)
+    if (fresh.length > check.length) {
+      complete = false
+      ctx.omissions.push({ section: 'metadata', what: 'PR search hits not confirmed', count: fresh.length - check.length, reason: 'ceiling_search_confirmations' })
+    }
+    for (const n of check) {
+      const got = await runJson(ctx, 'metadata', 'pull', argv.pull(repo, n))
+      const f = got.ok ? pullFacts(got.value) : null
+      if (!f) {
+        complete = false
+        continue
+      }
+      if (f.headSha === sha && f.baseRepo.toLowerCase() === repo.toLowerCase()) {
+        heads.add(n)
+        confirmed.set(n, got.ok ? got.value : null)
+      }
+    }
   }
-  const n = heads[0]!.number
+  const association = {
+    sources,
+    complete,
+    note: complete
+      ? 'Both sources were read in full; GitHub search lags new PRs, so this is not proof that none exists.'
+      : 'A source failed or was cut short; a PR with this head may exist.',
+  }
+  if (heads.size === 0) {
+    return { repo, sha, pr: null, prNumber: null, metadata: { status: 'no_pr_found', reason: 'no PR found whose current head is this commit', association } }
+  }
+  if (heads.size > 1) {
+    return { repo, sha, pr: null, prNumber: null, metadata: { status: 'ambiguous', candidates: [...heads].sort((a, b) => a - b), reason: 'more than one open or closed PR has this commit as its current head', association } }
+  }
+  const only = [...heads][0]!
+  const already = confirmed.get(only)
+  if (already !== undefined && already !== null) {
+    identity.pr = only
+    return { repo, sha, pr: already, prNumber: only, metadata: null }
+  }
+  const n = only
   const full = await runJson(ctx, 'metadata', 'pull', argv.pull(repo, n))
   if (!full.ok) return { repo, sha, pr: null, prNumber: n, metadata: { status: 'error', reason: `could not read PR ${n}` } }
   const facts = pullFacts(full.value)

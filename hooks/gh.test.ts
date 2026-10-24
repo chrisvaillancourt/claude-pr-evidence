@@ -25,6 +25,8 @@ describe('argv builders', () => {
     expect(argv.runs(R, H)).toEqual(['gh', 'api', '--hostname', 'github.com', '--method', 'GET', `repos/${R}/actions/runs`, '-f', `head_sha=${H}`, '-f', 'per_page=100'])
     expect(argv.jobs(R, 11, 2)).toEqual(['gh', 'api', '--hostname', 'github.com', '--method', 'GET', `repos/${R}/actions/runs/11/attempts/2/jobs`, '-f', 'per_page=100'])
     expect(argv.checks(R, H)).toContain('filter=latest')
+    expect(argv.searchPrs(R, H)).toEqual(['gh', 'api', '--hostname', 'github.com', '--method', 'GET', 'search/issues', '-f', `q=repo:${R} is:pr ${H}`, '-f', 'per_page=20'])
+    expect(isReadOnlyArgv(argv.searchPrs(R, H))).toBe(true)
   })
   test('the log, workspace and git commands', async () => {
     expect(argv.log(R, 11, 2, 99)).toEqual(['gh', 'run', 'view', '11', '--repo', `github.com/${R}`, '--attempt', '2', '--job', '99', '--log-failed'])
@@ -61,6 +63,9 @@ describe('isReadOnlyArgv refuses anything that could write', () => {
     ['git', 'checkout', 'main'],
     ['git', 'rev-parse', 'HEAD', '--', 'x'],
     ['sh', '-c', 'gh api x'],
+    [...GET, 'search/issues', '-f', 'q=repo:octo-org/widget is:pr author:someone'],
+    [...GET, 'search/issues', '-f', `q=repo:${R} is:pr ${H} label:x`],
+    [...GET, 'search/code', '-f', `q=repo:${R} is:pr ${H}`],
   ]
   test('corpus', async () => {
     for (const a of refused) expect([a.join(' '), isReadOnlyArgv(a)]).toEqual([a.join(' '), false])

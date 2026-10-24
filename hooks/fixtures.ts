@@ -129,3 +129,10 @@ export function status(list: { context: string; state: string }[] = []): O {
 const TS = '2026-01-02T10:02:30.1234567Z '
 /** `gh run view --log-failed` text for job `job`: `[step, line]` pairs. */
 export const logText = (jobName: string, lines: [string, string][]): string => lines.map(([s, l]) => `${jobName}\t${s}\t${TS}${l}`).join('\n') + '\n'
+
+/** A `search/issues` payload listing PRs by number. */
+export const search = (numbers: number[], incomplete = false): O => ({
+  total_count: numbers.length,
+  incomplete_results: incomplete,
+  items: numbers.map(number => ({ number, state: 'open', pull_request: { url: `https://api.github.com/repos/${REPO}/pulls/${number}` } })),
+})

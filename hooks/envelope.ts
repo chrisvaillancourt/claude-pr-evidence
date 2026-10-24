@@ -344,30 +344,68 @@ export function fitEnvelope(input: Envelope, maxBytes: number): Envelope {
 export type Gap = { section: string; what: string }
 
 /**
- * Every place the envelope reports itself incomplete: a CI section with
- * `complete: false`, an association with `complete: false`, runs whose jobs or
- * logs weren't inspected, a requested section in `error`. Read from the
- * envelope itself, not from the collector's bookkeeping.
+ * Every field the envelope can carry that says something was cut, truncated,
+ * left out or left incomplete, and which of its values is a gap. `coverageGaps`
+ * walks the whole envelope against this list; the contract test in
+ * envelope.test.ts fails on a marker-like field that isn't listed here.
+ */
+export const COVERAGE_MARKERS: Readonly<Record<string, (v: unknown, parent: O) => boolean>> = {
+  /** CI sections and `metadata.association`. */
+  complete: v => v === false,
+  /** Log tails: `steps[]`, `job_tail`, `error_marker_excerpt`. */
+  cut: v => v === true,
+  patch_truncated: v => v === true,
+  body_truncated: v => v === true,
+  /** `github_omitted` is GitHub's own absence (binary or huge file), documented, not a cut. */
+  patch_unavailable: v => v !== 'github_omitted',
+  log_omitted: v => v !== undefined,
+  jobs_not_inspected: v => v !== undefined,
+  runs_not_inspected: v => Array.isArray(v) && v.length > 0,
+  listing: v => v !== 'listed',
+  /** Sections: `error`, or `omitted` by the last-resort fit. */
+  status: v => v === 'error' || v === 'omitted',
+  /** A log entry's reason: a cut or failed capture, not an unavailable attribution. */
+  reason: (v, parent) => parent.attribution !== undefined && typeof v === 'string' && (v === 'capture_truncated' || v === 'logs_unavailable' || v.startsWith('log_fetch_')),
+  files_total: (v, parent) => typeof v === 'number' && typeof parent.files_listed === 'number' && v > parent.files_listed,
+  /** Supported states that are not gaps; listed so the contract test knows them. */
+  changed_during_collection: () => false,
+}
+
+/** The ledger section a path in the envelope belongs to. */
+function sectionOf(path: readonly string[]): string {
+  const top = path[0] ?? ''
+  if (top === 'ci' && (path[1] === 'workflows' || path[1] === 'checks' || path[1] === 'statuses')) return `ci.${path[1]}`
+  return top
+}
+
+/** Visits every object in the envelope's sections (not the ledger itself) with its path. */
+export function walkSections(env: Envelope, visit: (o: O, path: string[]) => void): void {
+  const go = (v: unknown, path: string[]) => {
+    if (Array.isArray(v)) v.forEach((x, i) => go(x, [...path, String(i)]))
+    else if (isObj(v)) {
+      visit(v, path)
+      for (const [k, x] of Object.entries(v)) if (typeof x === 'object' && x !== null) go(x, [...path, k])
+    }
+  }
+  for (const k of ['metadata', 'diff', 'ci', 'logs'] as const) go(env[k], [k])
+}
+
+/**
+ * Every place the envelope reports itself incomplete, read from the envelope
+ * itself (COVERAGE_MARKERS), not from the collector's bookkeeping. One gap per
+ * section and marker.
  */
 export function coverageGaps(env: Envelope): Gap[] {
-  const gaps: Gap[] = []
-  for (const k of ['metadata', 'diff', 'ci', 'logs'] as const) {
-    if ((env[k] as O).status === 'error') gaps.push({ section: k, what: `${k} is in error` })
-  }
-  for (const k of ['workflows', 'checks', 'statuses'] as const) {
-    const sec = env.ci[k] as O | undefined
-    if (isObj(sec) && sec.complete === false) gaps.push({ section: `ci.${k}`, what: `ci.${k} reports itself incomplete` })
-  }
-  if (isObj(env.metadata.association) && env.metadata.association.complete === false) {
-    gaps.push({ section: 'metadata', what: 'the PR association reports itself incomplete' })
-  }
-  const runs = isObj(env.ci.workflows) && Array.isArray(env.ci.workflows.runs) ? (env.ci.workflows.runs as O[]) : []
-  const uninspected = runs.filter(r => r.jobs_not_inspected !== undefined).length
-  if (uninspected > 0) gaps.push({ section: 'ci.workflows', what: `${uninspected} failed runs have no jobs inspected` })
-  if (Array.isArray(env.logs.runs_not_inspected) && env.logs.runs_not_inspected.length > 0) {
-    gaps.push({ section: 'logs', what: 'failed runs have no logs collected' })
-  }
-  return gaps
+  const seen = new Map<string, Gap>()
+  walkSections(env, (o, path) => {
+    for (const [k, v] of Object.entries(o)) {
+      if (!Object.hasOwn(COVERAGE_MARKERS, k) || !COVERAGE_MARKERS[k]!(v, o)) continue
+      const section = sectionOf(path)
+      const id = `${section}\u0000${k}`
+      if (!seen.has(id)) seen.set(id, { section, what: `${[...path, k].join('.')} is ${JSON.stringify(v)}` })
+    }
+  })
+  return [...seen.values()]
 }
 
 /**

@@ -94,7 +94,7 @@ describe('completeness is derived, never asserted', () => {
     const e = base({ ci: { status: 'ok', workflows: { ...sec(false), runs: [] }, checks: sec(true), statuses: sec(true), required_checks: 'not_evaluated' } })
     const out = withCollection(e)
     expect(out.collection).toBe('partial')
-    expect(out.errors).toEqual([{ section: 'ci.workflows', step: 'coverage', kind: 'unaccounted_gap', message: 'ci.workflows reports itself incomplete and no error or omission says why' }])
+    expect(out.errors).toEqual([{ section: 'ci.workflows', step: 'coverage', kind: 'unaccounted_gap', message: 'ci.workflows.complete is false and no error or omission says why' }])
   })
 
   test('a gap its section already accounts for adds nothing', async () => {
@@ -119,3 +119,37 @@ describe('completeness is derived, never asserted', () => {
     expect(withCollection(base({ collection: 'error', ci: { status: 'not_collected' } })).collection).toBe('error')
   })
 })
+
+describe('coverageGaps reads every truncation marker', () => {
+  const ok = { state: 'passed', complete: true, has_pending: false, counts: { passed: 1, neutral: 0, failed: 0, pending: 0, unknown: 0 } }
+  const clean = (): Envelope => envelope({ metadata: { status: 'ok', body_truncated: false }, diff: { status: 'ok', files_total: 1, files_listed: 1, files: [{ filename: 'a', patch: 'p' }] }, logs: { status: 'ok', jobs: [] }, ci: { status: 'ok', workflows: { ...ok, runs: [] }, checks: ok, statuses: ok, required_checks: 'not_evaluated' } })
+  // [case, change, gap section]
+  const rows: [string, (e: any) => void, string][] = [
+    ['step tail cut', e => (e.logs.jobs = [{ attribution: 'step', steps: [{ name: 's', lines: [], cut: true }] }]), 'logs'],
+    ['job tail cut', e => (e.logs.jobs = [{ attribution: 'step_logs_unavailable', reason: 'unknown_step', job_tail: { lines: [], cut: true } }]), 'logs'],
+    ['excerpt cut', e => (e.logs.jobs = [{ attribution: 'step_logs_unavailable', reason: 'unknown_step', error_marker_excerpt: { lines: [], cut: true } }]), 'logs'],
+    ['capture truncated', e => (e.logs.jobs = [{ attribution: 'step_logs_unavailable', reason: 'capture_truncated' }]), 'logs'],
+    ['log omitted', e => (e.logs.jobs = [{ log_omitted: 'ceiling_logs_bytes' }]), 'logs'],
+    ['patch truncated', e => (e.diff.files[0].patch_truncated = true), 'diff'],
+    ['patch dropped for a limit', e => (e.diff.files[0].patch_unavailable = 'ceiling_diff_bytes'), 'diff'],
+    ['files not listed', e => (e.diff.files_total = 400), 'diff'],
+    ['body truncated', e => (e.metadata.body_truncated = true), 'metadata'],
+    ['run not in final page', e => (e.ci.workflows.runs = [{ id: 1, listing: 'not_in_final_page' }]), 'ci.workflows'],
+    ['section omitted by the last-resort fit', e => (e.diff = { status: 'omitted', reason: 'ceiling_output_bytes' }), 'diff'],
+  ]
+  test('each marker is a gap in its section', async () => {
+    for (const [name, change, section] of rows) {
+      const e = clean()
+      change(e)
+      expect([name, coverageGaps(e).map(g => g.section)]).toEqual([name, [section]])
+    }
+  })
+  test('supported states are not gaps', async () => {
+    const e = clean() as any
+    e.diff.files[0] = { filename: 'bin.png', patch_unavailable: 'github_omitted' }
+    e.logs.jobs = [{ attribution: 'step_logs_unavailable', reason: 'unknown_step', job_tail: { lines: [], cut: false } }]
+    e.ci.workflows.runs = [{ id: 1, listing: 'listed', changed_during_collection: true }]
+    expect(coverageGaps(e)).toEqual([])
+  })
+})
+

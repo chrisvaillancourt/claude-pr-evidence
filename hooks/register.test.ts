@@ -870,6 +870,53 @@ const REPROS: [string, (w: W) => void, Record<string, unknown>, Ledger][] = [
   }, { repo: REPO, sha: HEAD, sections: ['ci'] }, { collection: 'partial', errors: [], omissions: ['ci.workflows:failed_during_collection'] }],
 ]
 
+/** One failed run with one failed job whose --log-failed text is `lines`. */
+function failedJobLog(w: W, lines: [string, string][]) {
+  bareCommit(w.gh)
+  w.gh(A.runs(REPO, HEAD), { json: F.runs([F.run({ id: 11, conclusion: 'failure' })]) })
+  w.gh(A.jobs(REPO, 11, 1), { json: F.jobs([F.job({ id: 101, runId: 11 })]) })
+  w.gh(A.log(REPO, 11, 1, 101), { text: F.logText('test', lines) })
+}
+
+describe('log tail cuts', () => {
+  const TAIL = { section: 'logs', what: 'log tails cut to 30 lines, 4 KiB and 400 characters a line', count: 1, reason: 'ceiling_log_tail' }
+
+  test('R4 repro: a 500-character line in an attributed step tail is a recorded cut', async ($, on) => {
+    const w = world(on)
+    await start($)
+    failedJobLog(w, [['Run tests', 'x'.repeat(500)]])
+    const env = await call($, { repo: REPO, sha: HEAD, sections: ['ci', 'logs'] })
+    expect(env.logs.jobs[0]).toMatchObject({ attribution: 'step', steps: [{ cut: true }] })
+    expect({ collection: env.collection, errors: env.errors, omissions: env.omissions }).toEqual({ collection: 'partial', errors: [], omissions: [TAIL] })
+  })
+
+  test('R4 repro: a 500-character line in the labelled job-tail fallback is a recorded cut', async ($, on) => {
+    const w = world(on)
+    await start($)
+    failedJobLog(w, [['UNKNOWN STEP', 'y'.repeat(500)]])
+    const env = await call($, { repo: REPO, sha: HEAD, sections: ['ci', 'logs'] })
+    expect(env.logs.jobs[0]).toMatchObject({ attribution: 'step_logs_unavailable', job_tail: { cut: true } })
+    expect({ collection: env.collection, errors: env.errors, omissions: env.omissions }).toEqual({ collection: 'partial', errors: [], omissions: [TAIL] })
+  })
+
+  test('a step longer than the 30-line tail is a recorded cut', async ($, on) => {
+    const w = world(on)
+    await start($)
+    failedJobLog(w, Array.from({ length: 40 }, (_, i) => ['Run tests', `line ${i}`] as [string, string]))
+    const env = await call($, { repo: REPO, sha: HEAD, sections: ['ci', 'logs'] })
+    expect({ collection: env.collection, omissions: env.omissions }).toEqual({ collection: 'partial', omissions: [TAIL] })
+  })
+
+  test('unavailable attribution alone, with nothing cut, stays complete', async ($, on) => {
+    const w = world(on)
+    await start($)
+    failedJobLog(w, [['UNKNOWN STEP', 'short'], ['UNKNOWN STEP', '##[error]boom']])
+    const env = await call($, { repo: REPO, sha: HEAD, sections: ['ci', 'logs'] })
+    expect(env.logs.jobs[0]).toMatchObject({ attribution: 'step_logs_unavailable', reason: 'unknown_step', job_tail: { cut: false }, error_marker_excerpt: { cut: false } })
+    expect(env.collection).toBe('complete')
+  })
+})
+
 describe('review repro corpus', () => {
   test('every repro produces its exact ledger', { options: { maxOutputKiB: 16 } }, async ($, on) => {
     const w = world(on)

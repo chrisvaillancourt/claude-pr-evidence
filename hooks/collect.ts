@@ -406,6 +406,12 @@ async function collectCi(ctx: Ctx, repo: string, sha: string, wantLogs: boolean)
     required_checks: 'not_evaluated',
   }
   const kept = logEntries.filter(l => !changed.has(l.runId)).map(l => l.entry)
+  // Tails cut to the per-tail limits (line count, bytes, line width) are a limit cut like any other.
+  const cutTails = kept.filter(e => {
+    const steps = Array.isArray(e.steps) ? (e.steps as { cut?: boolean }[]) : []
+    return steps.some(x => x.cut === true) || (e.job_tail as { cut?: boolean } | undefined)?.cut === true || (e.error_marker_excerpt as { cut?: boolean } | undefined)?.cut === true
+  }).length
+  if (wantLogs && cutTails > 0) ctx.omissions.push({ section: 'logs', what: 'log tails cut to 30 lines, 4 KiB and 400 characters a line', count: cutTails, reason: 'ceiling_log_tail' })
   const logs: Envelope['logs'] = { status: 'ok', jobs: kept }
   if (notInspected.length > 0) logs.runs_not_inspected = notInspected.map(r => ({ repo, sha, ...r }))
   return { ci, logs: wantLogs ? logs : { status: 'not_requested' } }

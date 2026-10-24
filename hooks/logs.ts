@@ -13,7 +13,7 @@ export type ParsedLog = {
   reason?: string
   steps?: StepTail[]
   job_tail?: { label: string; lines: string[]; lines_total: number; cut: boolean }
-  error_marker_excerpt?: { label: string; lines: string[]; error_lines: string[] }
+  error_marker_excerpt?: { label: string; lines: string[]; error_lines: string[]; cut: boolean }
 }
 
 export const LOG_LIMITS = { lines: 30, bytes: 4096, width: 400, errorLines: 10, excerptLookback: 200 }
@@ -101,5 +101,5 @@ function errorMarkerExcerpt(lines: readonly string[]): ParsedLog['error_marker_e
   const t = tailLines(lines.slice(start, first + 1), LOG_LIMITS.lines, LOG_LIMITS.bytes, LOG_LIMITS.width)
   const errors = lines.filter(l => l.includes('##[error]'))
   const errorTail = tailLines(errors.slice(0, LOG_LIMITS.errorLines), LOG_LIMITS.errorLines, 1024, LOG_LIMITS.width)
-  return { label: EXCERPT_LABEL, lines: t.lines, error_lines: errorTail.lines }
+  return { label: EXCERPT_LABEL, lines: t.lines, error_lines: errorTail.lines, cut: t.cut || errorTail.cut || errors.length > LOG_LIMITS.errorLines }
 }

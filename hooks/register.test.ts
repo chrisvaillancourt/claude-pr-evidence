@@ -395,6 +395,32 @@ describe('identity', () => {
 })
 
 describe('reruns', () => {
+  test('a failure pushed off a full final page stays visible (review repro: 101 runs, jobs 502)', async ($, on) => {
+    const w = world(on)
+    await start($)
+    bareCommit(w.gh)
+    const first = [...Array.from({ length: 99 }, (_, i) => F.run({ id: i + 1 })), F.run({ id: 100, conclusion: 'failure' })]
+    const second = [F.run({ id: 101 }), ...Array.from({ length: 99 }, (_, i) => F.run({ id: i + 1 }))]
+    w.gh(A.runs(REPO, HEAD), { json: F.runs(first, 100) }, { json: F.runs(second, 101) })
+    w.gh(A.jobs(REPO, 100, 1), { exit: 1, stderr: 'gh: Server Error (HTTP 502)' })
+    const env = await call($, { repo: REPO, sha: HEAD, sections: ['ci'] })
+    expect(env.ci.observed_outcome.state).toBe('failing')
+    expect(env.ci.workflows.runs.find((r: any) => r.id === 100)).toMatchObject({ class: 'failed', listing: 'not_in_final_page' })
+    expect(env.ci.workflows.runs.find((r: any) => r.id === 101)).toMatchObject({ class: 'passed', listing: 'listed' })
+    expect(env.ci.workflows.complete).toBe(false)
+  })
+
+  test('a run gone from a complete final read is reported as no longer listed, not dropped', async ($, on) => {
+    const w = world(on)
+    await start($)
+    bareCommit(w.gh)
+    w.gh(A.runs(REPO, HEAD), { json: F.runs([F.run({ id: 11 }), F.run({ id: 12, conclusion: 'failure' })]) }, { json: F.runs([F.run({ id: 11 })]) })
+    w.gh(A.jobs(REPO, 12, 1), { json: F.jobs([]) })
+    const env = await call($, { repo: REPO, sha: HEAD, sections: ['ci'] })
+    expect(env.ci.workflows.runs.map((r: any) => [r.id, r.listing])).toEqual([[11, 'listed'], [12, 'no_longer_listed']])
+    expect(env.ci.observed_outcome.state).toBe('failing')
+  })
+
   test('a successful-only snapshot is rechecked too: a rerun that started is pending, not passed', async ($, on) => {
     const w = world(on)
     await start($)

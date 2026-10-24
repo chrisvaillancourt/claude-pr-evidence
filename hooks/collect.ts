@@ -4,6 +4,7 @@
 import { HOST, SHA_RE, argv, classifyRejection, classifyResult, parseJson } from './gh'
 import type { Done, Fail } from './gh'
 import { parseFailedLog } from './logs'
+import { reconcileRuns } from './runs'
 import { notCollected, overallOutcome, sectionState } from './outcome'
 import type { Cls, Section } from './outcome'
 import { CEILINGS } from './policy'
@@ -300,44 +301,47 @@ async function collectCi(ctx: Ctx, repo: string, sha: string, wantLogs: boolean)
   // that changed (a rerun started, a run finished) counts in its new state and
   // invalidates what was read for its older one. A recheck that fails can't confirm
   // the first read, so the section is incomplete (known failures still count).
-  const changed = new Set<number>()
+  let final: RunHeader[] | null = null
+  let finalComplete = false
   let recheckFailed = false
   if (headers.length > 0 && !runsError) {
     const again = await runJson(ctx, 'ci.workflows', 'runs_recheck', argv.runs(repo, sha))
     const l2 = again.ok ? listOf(again.value, 'workflow_runs') : null
     if (again.ok && !l2) fail(ctx, 'ci.workflows', 'runs_recheck', 'malformed', 'actions/runs is not a workflow run list')
     if (!l2) recheckFailed = true
-    if (l2) {
-      const before = new Map(headers.map(h => [h.id, h]))
-      const fresh: RunHeader[] = []
+    else {
+      final = []
       for (const item of l2.items.slice(0, CEILINGS.runs)) {
         const h = runHeader(item)
-        if (!h || h.headSha !== sha) continue
-        const old = before.get(h.id)
-        if (old && (old.attempt !== h.attempt || old.status !== h.status || old.conclusion !== h.conclusion)) changed.add(h.id)
-        fresh.push(h)
+        if (h && h.headSha === sha) final.push(h)
       }
-      headers = fresh
-      runsTotal = l2.total
-      for (const id of changed) {
-        const r = jobsByRun.get(id)
-        if (r) {
-          ctx.omissions.push({ section: 'logs', what: `jobs and logs of run ${id} attempt ${r.attempt}`, count: 1, reason: 'run_changed_during_collection' })
-          jobsByRun.delete(id)
-        }
-      }
+      finalComplete = l2.total <= l2.items.length && l2.items.length <= CEILINGS.runs
+      runsTotal = Math.max(runsTotal, l2.total)
     }
   }
+  const merged = reconcileRuns(headers, final, finalComplete)
+  const changed = new Set(merged.filter(m => m.changed).map(m => m.header.id))
+  for (const id of changed) {
+    const r = jobsByRun.get(id)
+    if (r) {
+      ctx.omissions.push({ section: 'logs', what: `jobs and logs of run ${id} attempt ${r.attempt}`, count: 1, reason: 'run_changed_during_collection' })
+      jobsByRun.delete(id)
+    }
+  }
+  const unlisted = merged.filter(m => m.listing === 'not_in_final_page' || m.listing === 'no_longer_listed').length
+  if (unlisted > 0) ctx.omissions.push({ section: 'ci.workflows', what: 'runs seen earlier but not in the final run list (kept as first observed)', count: unlisted, reason: 'run_list_changed_during_collection' })
 
-  const runs = headers.map(h => {
-    const r = shapeRun(h)
-    if (changed.has(h.id)) r.changed_during_collection = true
-    const jr = jobsByRun.get(h.id)
+  const runs = merged.map(m => {
+    const r = shapeRun(m.header)
+    if (final !== null || recheckFailed) r.listing = m.listing
+    if (m.changed) r.changed_during_collection = true
+    const jr = jobsByRun.get(m.header.id)
     if (jr) r.failed_jobs = jr.jobs.filter(isFailedJob).map(shapeFailedJob)
     return r
   })
+  const runsComplete = !runsError && !recheckFailed && unlisted === 0 && (final !== null ? finalComplete : runsTotal <= headers.length)
   workflows = {
-    ...sectionState({ error: runsError || recheckFailed, total: runsTotal, classes: runs.map(r => r.class as Cls), complete: !runsError && !recheckFailed && runsTotal <= runs.length }, 'workflows'),
+    ...sectionState({ error: runsError || recheckFailed, total: runsTotal, classes: runs.map(r => r.class as Cls), complete: runsComplete }, 'workflows'),
     total_count: runsTotal,
     runs,
   }

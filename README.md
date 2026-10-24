@@ -59,7 +59,7 @@ Classes: `success` passes; `neutral` and `skipped` are neutral; `failure`, `time
 
 The overall `ci.observed_outcome.state` is the first that applies: `failing` (any failure in any section), `pending`, `inconclusive`, `no_workflows` (no Actions runs, no check runs and no statuses), `skipped_only`, `observed_passed`. When there are no Actions runs but another app's check runs passed, the overall state is `observed_passed` and `ci.workflows.state` still says `no_workflows`.
 
-Whenever Actions runs were found, the snapshot reads the run list once more at the end, after everything else. A run that changed (new attempt, new status) counts in its final state, marked `changed_during_collection`, and jobs and logs collected for its older attempt are dropped and listed in `omissions`. If that second read fails, the first can't be confirmed: `ci.workflows` is incomplete and the result is `inconclusive` unless something failed.
+Whenever Actions runs were found, the snapshot reads the run list once more at the end, after everything else, and merges the two reads by run ID. A run in the final read counts in its final state; if it changed (new attempt, new status) it is marked `changed_during_collection`, and jobs and logs collected for its older attempt are dropped and listed in `omissions`. A run the final read doesn't list is kept as first observed, with `listing: "not_in_final_page"` (the final page was full) or `"no_longer_listed"`, so a known failure never disappears; that also makes `ci.workflows` incomplete. Runs only the final read lists are added. If the final read fails, the first can't be confirmed (`listing: "not_rechecked"`): `ci.workflows` is incomplete and the result is `inconclusive` unless something failed.
 
 ### Logs
 

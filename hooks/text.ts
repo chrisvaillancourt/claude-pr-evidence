@@ -1,14 +1,72 @@
 // Text helpers for untrusted GitHub text (PR body, patches, logs). Pure.
 
-const OSC = /\x1b\][\s\S]*?(?:\x07|\x1b\\)/g
-const CSI = /\x1b\[[0-?]*[ -/]*[@-~]/g
-const ESC = /\x1b[@-_]?/g
-// C0 except tab and newline, DEL, C1, bidi embeddings/overrides/isolates, BOM.
-const CONTROL = /[\x00-\x08\x0b-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g
+// C0 except tab and newline (CR goes too), DEL, C1, bidi embeddings/overrides/isolates, BOM.
+function isDropped(c: number): boolean {
+  return (c <= 0x1f && c !== 0x09 && c !== 0x0a) || (c >= 0x7f && c <= 0x9f) || c === 0x200e || c === 0x200f ||
+    (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069) || c === 0xfeff
+}
 
-/** Removes terminal control sequences and invisible controls; keeps tabs and newlines. */
+/**
+ * Removes terminal control sequences and invisible controls; keeps tabs and newlines.
+ *
+ * One forward pass, no regex: untrusted logs can hold any byte pattern, and a
+ * backtracking matcher on repeated unterminated sequences went quadratic (a
+ * 200 KB line wedged the hooks worker). Every scan stops at the next ESC, so
+ * each character is looked at a bounded number of times.
+ *
+ * - CSI `ESC [ params intermediates final` is dropped whole; an invalid or
+ *   unfinished one drops only `ESC [`.
+ * - String sequences (OSC `ESC ]`, DCS `ESC P`, SOS `ESC X`, PM `ESC ^`, APC
+ *   `ESC _`) are dropped through their BEL or `ESC \\` terminator. Another ESC
+ *   inside ends one there (as a terminal does); one that reaches the end of the
+ *   text drops only its two-character introducer and keeps the text.
+ * - Any other `ESC x` (x in @..._) drops both; a lone ESC drops.
+ */
 export function stripControls(s: string): string {
-  return s.replace(OSC, '').replace(CSI, '').replace(ESC, '').replace(/\r\n?/g, m => (m === '\r\n' ? '\n' : '')).replace(CONTROL, '')
+  const n = s.length
+  let out = ''
+  let from = 0
+  let i = 0
+  const emitTo = (end: number) => {
+    if (end > from) out += s.slice(from, end)
+  }
+  while (i < n) {
+    const c = s.charCodeAt(i)
+    if (c === 0x1b) {
+      emitTo(i)
+      const x = i + 1 < n ? s.charCodeAt(i + 1) : -1
+      if (x === 0x5b) {
+        // CSI
+        let j = i + 2
+        while (j < n && s.charCodeAt(j) >= 0x30 && s.charCodeAt(j) <= 0x3f) j++
+        while (j < n && s.charCodeAt(j) >= 0x20 && s.charCodeAt(j) <= 0x2f) j++
+        const f = j < n ? s.charCodeAt(j) : -1
+        i = f >= 0x40 && f <= 0x7e ? j + 1 : i + 2
+      } else if (x === 0x5d || x === 0x50 || x === 0x58 || x === 0x5e || x === 0x5f) {
+        // String sequence: scan to BEL, ESC \\, another ESC, or the end.
+        let j = i + 2
+        while (j < n) {
+          const d = s.charCodeAt(j)
+          if (d === 0x07 || d === 0x1b) break
+          j++
+        }
+        if (j >= n) i = i + 2
+        else if (s.charCodeAt(j) === 0x07) i = j + 1
+        else if (j + 1 < n && s.charCodeAt(j + 1) === 0x5c) i = j + 2
+        else i = j
+      } else if (x >= 0x40 && x <= 0x5f) i = i + 2
+      else i = i + 1
+      from = i
+      continue
+    }
+    if (isDropped(c)) {
+      emitTo(i)
+      from = i + 1
+    }
+    i++
+  }
+  emitTo(n)
+  return out
 }
 
 /** The UTF-8 length of `s` in bytes. */

@@ -30,7 +30,7 @@ The README's "Contract" and "Outcome rules" sections are the spec. These hold fo
 - **Bounded.** Ceilings live in `CEILINGS` (`policy.ts`); the result is always one valid JSON string within `maxOutputKiB`, fitted by dropping patches and log lines first and recording each drop in `omissions`. Never cut serialized JSON.
 - **Off is checked with a versioned `update`, not `read`,** before every command and before returning: a plain `read` returned the dispatch's snapshot in the test kit and missed an off switch flipped while a command ran.
 - **Stable tool list.** The tool is registered once per `session.start`, whatever the mode; off and subagent refusals happen in the handler. No cache, no watcher, no timers, no model calls.
-- **Untrusted text.** PR title and body, patches and logs have terminal control sequences stripped and are never interpreted.
+- **Untrusted text.** PR title and body, patches and logs have terminal control sequences stripped and are never interpreted. Every pass over them is single-pass and linear: no backtracking regex on untrusted text (`stripControls` is a hand scanner; an OSC regex went quadratic on `'\x1b]'.repeat(100_000)` and wedged the hooks worker live). Timing tests in `logs.test.ts` hold the bound.
 
 ## Commands
 

@@ -32,6 +32,38 @@ describe('text', () => {
   test('stripControls corpus', async () => {
     for (const [input, out] of rows) expect([input, stripControls(input)]).toEqual([input, out])
   })
+  // Hostile and unterminated sequences: [input, expected].
+  const hostile: [string, string][] = [
+    ['a\x1b]unterminated title', 'aunterminated title'],
+    ['a\x1b]0;t\x1b[31mred', 'ared'],
+    ['a\x1b[12;34', 'a12;34'],
+    ['a\x1b[\x1b[0mb', 'ab'],
+    ['a\x1bPdcs payload\x1b\\b', 'ab'],
+    ['trailing esc\x1b', 'trailing esc'],
+  ]
+  test('stripControls: unterminated and nested sequences', async () => {
+    for (const [input, out] of hostile) expect([input, stripControls(input)]).toEqual([input, out])
+  })
+  test('stripControls is linear on repeated unterminated OSC starts (review repro)', async () => {
+    const line = '\x1b]'.repeat(100_000)
+    const t0 = Date.now()
+    const out = stripControls(line)
+    const ms = Date.now() - t0
+    expect(out).toBe('')
+    expect(ms).toBeLessThan(250)
+    const mixed = `${'\x1b]x'.repeat(50_000)}${'\x1b['.repeat(50_000)}${'\x1bP'.repeat(50_000)}`
+    const t1 = Date.now()
+    stripControls(mixed)
+    expect(Date.now() - t1).toBeLessThan(250)
+  })
+  test('a 4 MiB hostile failed-job log parses well inside the worker heartbeat', async () => {
+    const line = `test\tUNKNOWN STEP\t${'\x1b]'.repeat(1000)}##[error]${'\x1b['.repeat(1000)}\n`
+    const text = line.repeat(Math.floor((4 * 1024 * 1024) / line.length))
+    const t0 = Date.now()
+    const r = parseFailedLog({ text, truncated: false, jobName: 'test', steps: [] })
+    expect(r.attribution).toBe('step_logs_unavailable')
+    expect(Date.now() - t0).toBeLessThan(1000)
+  })
   test('utf8Bytes counts bytes', async () => {
     expect(utf8Bytes('abc')).toBe(3)
     expect(utf8Bytes('é')).toBe(2)

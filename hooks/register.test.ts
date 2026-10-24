@@ -947,3 +947,17 @@ describe('review repro corpus', () => {
   })
 })
 
+describe('final review fit diagnostics', () => {
+  test('a globally explained last-resort fit adds no unaccounted errors', { options: { maxOutputKiB: 16 } }, async ($, on) => {
+    const w = world(on)
+    await start($)
+    bareCommit(w.gh)
+    w.gh(A.checks(REPO, HEAD), { json: F.checks(Array.from({ length: 100 }, (_, i) => F.check({ id: i + 1, conclusion: 'failure' }))) })
+    const env = await call($, { repo: REPO, sha: HEAD, sections: ['ci'] })
+    expect(env.collection).toBe('partial')
+    expect(env.ci.observed_outcome).toMatchObject({ state: 'failing', counts: { failed: 100 } })
+    expect(env.omissions).toEqual([{ section: 'all', what: 'every section but the outcome', count: 'unknown', reason: 'ceiling_output_bytes' }])
+    expect(env.errors).toEqual([])
+  })
+})
+

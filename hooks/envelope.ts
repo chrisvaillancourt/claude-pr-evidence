@@ -434,7 +434,8 @@ export function coverageGaps(env: Envelope): Gap[] {
  */
 export function withCollection(env: Envelope): Envelope {
   const accounted = (section: string) =>
-    [...env.errors, ...env.omissions].some(x => x.section === section || x.section.startsWith(`${section}.`))
+    // An `all` entry (the last-resort fit) explains every section.
+    [...env.errors, ...env.omissions].some(x => x.section === 'all' || x.section === section || x.section.startsWith(`${section}.`))
   const extra: ErrorEntry[] = []
   for (const g of coverageGaps(env)) {
     if (accounted(g.section) || extra.some(x => x.section === g.section)) continue

@@ -7,7 +7,7 @@ A Claude Code mod (function-hook plugin) that gives the model one read-only tool
 - At `session.start` the mod registers the tool `mcp__pr-evidence__pr_evidence` (behind ToolSearch) and the `/pr-evidence` command. The tool list doesn't change after that, whatever the mode.
 - The model calls the tool; the mod runs `gh` (your existing `gh auth login`) and, for the workspace shorthand, `git rev-parse HEAD`, one process at a time, and returns one JSON string.
 - Main conversation only by default: a call from a subagent is refused unless `allowSubagents` is on.
-- Off (`/pr-evidence off` or `enabled: false`): calls are refused before any process starts. Turning it off while a call is collecting makes that call return a refusal instead of evidence.
+- Off (`/pr-evidence off` or `enabled: false`): calls are refused before any process starts. Turning it off while a call is collecting makes that call return a refusal instead of evidence. (On Claude Code 2.1.310 a `/pr-evidence off` typed in the prompt box during a call is queued until the turn ends, and its "send now" shortcut interrupts the call first, which then returns with `aborted` errors; so from the prompt box, off applies to the next call.)
 - It never runs anything that writes: no `POST`/`PATCH`/`PUT`/`DELETE`, no reruns, no `workflow run`, no `pr checkout`, no `auth` commands. Every REST call is `gh api --method GET` (`gh api -f` would otherwise send POST).
 
 ## Tool input

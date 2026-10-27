@@ -47,7 +47,7 @@ class TurnedOff extends Error {}
 /** Best effort: reporting must never throw out of a hook. */
 function log($: EngineInterface, text: string) {
   try {
-    $.ui.log(`${NAME}: ${text}`)
+    $.ui.log(text)
   } catch {
     // nothing to do
   }
@@ -135,5 +135,9 @@ export const register: Register = (on, options) => {
   // The tool is this plugin's own: nothing beneath answers it, so a failure here
   // is a refusal, never a fall-through and never a partial result.
   on('tool.call', { tool: TOOL }, ($, e, next) => serve($, e as unknown as Record<string, unknown>, next.signal))
-    .catch(() => ({ deny: 'pr-evidence failed inside the plugin; no evidence returned.' }))
+    .catch(($, e, next) => {
+      // The model gets a generic refusal; the reason goes to the log.
+      log($, `internal error (${next.error.kind}): ${next.error.message ?? 'no message'}`)
+      return { deny: 'pr-evidence failed inside the plugin; no evidence returned.' }
+    })
 }

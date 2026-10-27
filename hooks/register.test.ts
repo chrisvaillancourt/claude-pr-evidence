@@ -20,11 +20,11 @@ type Reply =
 const everyArgv: string[][] = []
 
 /** The engine beneath the plugin, with a `gh`/`git` that answers from `replies` by argv. */
-function world(on: On) {
+function world(on: On, opts: { cwdDeny?: string } = {}) {
   const replies = new Map<string, Reply | Reply[]>()
-  const seen = { argv: [] as string[][], inits: [] as Record<string, unknown>[], tools: [] as Record<string, unknown>[], commands: [] as string[] }
+  const seen = { argv: [] as string[][], inits: [] as Record<string, unknown>[], tools: [] as Record<string, unknown>[], commands: [] as string[], logs: [] as string[] }
   on('session.start', ($, e) => ({ cwd: e.cwd }))
-  on('session.cwd', () => ({ value: '/work/widget' }))
+  on('session.cwd', () => (opts.cwdDeny !== undefined ? { deny: opts.cwdDeny } : { value: '/work/widget' }))
   on('command.register', ($, e) => {
     seen.commands.push(e.name)
     return { value: { command: e.name } }
@@ -33,7 +33,10 @@ function world(on: On) {
     seen.tools.push({ ...e })
     return { value: { tool: `mcp__pr-evidence__${e.name}` } }
   })
-  on('ui.log', () => ({ value: undefined }))
+  on('ui.log', ($, e) => {
+    seen.logs.push(e.text)
+    return { value: undefined }
+  })
   let t = Date.parse('2026-01-03T00:00:00Z')
   on('clock.now', () => ({ value: (t += 100) }))
   on('process.run', async ($, e) => {
@@ -109,6 +112,28 @@ describe('registration', () => {
     expect(schema.additionalProperties).toBe(false)
     expect(Object.keys(schema.properties)).toEqual(['repo', 'pr', 'sha', 'sections'])
     expect(w.seen.commands).toEqual(['pr-evidence'])
+  })
+})
+
+describe('log lines', () => {
+  test('a call logs its summary with no hand-written plugin-name prefix (the engine adds it)', async ($, on) => {
+    const w = world(on)
+    await start($)
+    bareCommit(w.gh)
+    await call($, { repo: REPO, sha: HEAD })
+    expect(w.seen.logs).toHaveLength(1)
+    expect(w.seen.logs[0]).toMatch(new RegExp(`^${REPO}@${HEAD.slice(0, 12)}: complete, ci no_workflows, \\d+ commands, 0 errors$`))
+    expect(w.seen.logs[0]!.startsWith('pr-evidence: ')).toBe(false)
+  })
+
+  test('a failure inside the plugin is still a generic refusal, and its message is logged', async ($, on) => {
+    const w = world(on, { cwdDeny: 'cwd unavailable in the test world' })
+    await start($)
+    const r = await call($, { repo: REPO, sha: HEAD })
+    expect(r.deny).toBe('pr-evidence failed inside the plugin; no evidence returned.')
+    expect(w.seen.logs).toHaveLength(1)
+    expect(w.seen.logs[0]).toContain('cwd unavailable in the test world')
+    expect(w.seen.logs[0]!.startsWith('pr-evidence: ')).toBe(false)
   })
 })
 

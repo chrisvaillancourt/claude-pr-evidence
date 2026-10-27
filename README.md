@@ -134,7 +134,7 @@ Or from inside Claude Code: `/plugin install pr-evidence --marketplace chrisvail
 
 Needs the GitHub CLI (`gh`) on your `PATH`, logged in to github.com.
 
-To work on it locally, add your clone as the marketplace instead (`claude plugin marketplace add <path to clone>`). The plugin is read from that folder; after editing, run `/reload-plugins`.
+To work on it locally, run a session with your clone loaded: `claude --plugin-dir <path to clone>` (that session only; saving a file reloads it). If the plugin is also installed, add `--settings '{"enabledPlugins":{"pr-evidence@pr-evidence":false}}'` so only the clone loads. An installed copy, even one installed from a local clone with `claude plugin marketplace add <path to clone>`, is a snapshot under `~/.claude/plugins/cache/`; edits to the clone reach it only after you bump `version` in `.claude-plugin/plugin.json` and run the update commands below.
 
 ## Update
 

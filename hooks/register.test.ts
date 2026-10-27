@@ -20,8 +20,16 @@ type Reply =
 const everyArgv: string[][] = []
 
 /** The engine beneath the plugin, with a `gh`/`git` that answers from `replies` by argv. */
-function world(on: On, opts: { cwdDeny?: string } = {}) {
+function world(on: On, opts: { cwdDeny?: string; store?: Record<string, unknown>; storeFails?: boolean; sessionId?: string } = {}) {
   const replies = new Map<string, Reply | Reply[]>()
+  // $.store as a map the test can read back; shared by every session of the plugin.
+  const store = new Map<string, unknown>(Object.entries(opts.store ?? {}))
+  const storeOp = <T>(f: () => T) => (opts.storeFails ? { deny: 'store unavailable' } : { value: f() })
+  on('store.get', ($, e) => storeOp(() => store.get(e.key)))
+  on('store.set', ($, e) => storeOp(() => void store.set(e.key, JSON.parse(JSON.stringify(e.value)))))
+  on('store.delete', ($, e) => storeOp(() => void store.delete(e.key)))
+  on('store.keys', () => storeOp(() => [...store.keys()]))
+  on('session.id', () => ({ value: opts.sessionId ?? 'sid-1' }))
   const seen = { argv: [] as string[][], inits: [] as Record<string, unknown>[], tools: [] as Record<string, unknown>[], commands: [] as string[], logs: [] as string[] }
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.cwd', () => (opts.cwdDeny !== undefined ? { deny: opts.cwdDeny } : { value: '/work/widget' }))
@@ -62,7 +70,7 @@ function world(on: On, opts: { cwdDeny?: string } = {}) {
     return done(x.exit, x.stdout ?? '', x.stderr)
   })
   const gh = (a: string[], ...r: Reply[]) => replies.set(a.join(' '), r.length === 1 ? r[0]! : r)
-  return { seen, gh }
+  return { seen, gh, store }
 }
 
 const start = ($: any) => $.session.start({ cwd: '/work/widget', surface: 'terminal', isInteractive: true })
@@ -753,6 +761,92 @@ describe('control', () => {
     await start($)
     const res = await $.command.run({ command: 'pr-evidence', args: 'bogus', ...COMMAND })
     expect(res.text).toContain('Usage: /pr-evidence')
+  })
+})
+
+describe('the session override survives a process move', () => {
+  const KEY = 'mode/sid-1'
+  const NOW = Date.parse('2026-01-03T00:00:00Z')
+  const DAY = 24 * 60 * 60 * 1000
+  const off = ($: any) => $.command.run({ command: 'pr-evidence', args: 'off', ...COMMAND })
+
+  test('/pr-evidence on|off is written to the store under the session id, with a time', async ($, on) => {
+    const w = world(on)
+    await start($)
+    expect(w.store.get(KEY)).toBeUndefined()
+    await off($)
+    expect(w.store.get(KEY)).toEqual({ mode: 'off', at: expect.any(Number) })
+    await $.command.run({ command: 'pr-evidence', args: 'on', ...COMMAND })
+    expect(w.store.get(KEY)).toEqual({ mode: 'on', at: expect.any(Number) })
+    // status reads, it doesn't write
+    w.store.delete(KEY)
+    await $.command.run({ command: 'pr-evidence', args: 'status', ...COMMAND })
+    expect(w.store.get(KEY)).toBeUndefined()
+  })
+
+  test('a new process restores an off switch from the store, and the tool stays off', async ($, on) => {
+    const w = world(on, { store: { [KEY]: { mode: 'off', at: NOW - DAY } } })
+    await start($)
+    expect((await call($, { repo: REPO, sha: HEAD })).deny).toContain('off')
+    expect(w.seen.argv).toEqual([])
+    const res = await $.command.run({ command: 'pr-evidence', args: 'status', ...COMMAND })
+    expect(res.text).toContain('off (set for this session)')
+    // the restored record is kept, with its time refreshed
+    expect(w.store.get(KEY)).toEqual({ mode: 'off', at: expect.any(Number) })
+    expect((w.store.get(KEY) as { at: number }).at).toBeGreaterThan(NOW - DAY)
+  })
+
+  test('a new process restores an on override over the enabled option', { options: { enabled: false } }, async ($, on) => {
+    const w = world(on, { store: { [KEY]: { mode: 'on', at: NOW } } })
+    await start($)
+    bareCommit(w.gh)
+    expect((await call($, { repo: REPO, sha: HEAD })).collection).toBe('complete')
+  })
+
+  test('a hot reload keeps the live state and leaves the record alone', async ($, on) => {
+    const w = world(on)
+    await start($)
+    await off($)
+    // a record that disagrees with the live state: the state wins on a reload
+    w.store.set(KEY, { mode: 'on', at: NOW })
+    await start($)
+    expect((await call($, { repo: REPO, sha: HEAD })).deny).toContain('off')
+    expect(w.store.get(KEY)).toEqual({ mode: 'on', at: NOW })
+  })
+
+  test('another session’s record is not restored and not touched; stale and malformed records are pruned', async ($, on) => {
+    const w = world(on, {
+      store: {
+        'mode/other': { mode: 'off', at: NOW - DAY },
+        'mode/stale': { mode: 'off', at: NOW - 31 * DAY },
+        'mode/bad': { mode: 'maybe', at: NOW },
+        unrelated: { at: NOW - 365 * DAY },
+      },
+    })
+    await start($)
+    bareCommit(w.gh)
+    expect((await call($, { repo: REPO, sha: HEAD })).collection).toBe('complete')
+    expect(w.store.get('mode/other')).toEqual({ mode: 'off', at: NOW - DAY })
+    expect(w.store.has('mode/stale')).toBe(false)
+    expect(w.store.has('mode/bad')).toBe(false)
+    expect(w.store.has('unrelated')).toBe(true)
+    expect(w.store.has(KEY)).toBe(false)
+  })
+
+  test('a malformed record for this session is ignored', async ($, on) => {
+    const w = world(on, { store: { [KEY]: 'off' } })
+    await start($)
+    bareCommit(w.gh)
+    expect((await call($, { repo: REPO, sha: HEAD })).collection).toBe('complete')
+  })
+
+  test('a store that fails changes nothing else', async ($, on) => {
+    const w = world(on, { storeFails: true })
+    await start($)
+    expect(w.seen.tools).toHaveLength(1)
+    expect((await off($)).text).toContain('off (set for this session)')
+    expect((await call($, { repo: REPO, sha: HEAD })).deny).toContain('off')
+    expect(w.seen.logs).toEqual([])
   })
 })
 

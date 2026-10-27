@@ -1,6 +1,6 @@
 {
   "name": "pr-evidence",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Reads a pull request's diff, its CI status for an exact commit and the failed jobs' logs, as one model-callable tool.",
   "types": "./types/index.d.ts",
   "userConfig": {

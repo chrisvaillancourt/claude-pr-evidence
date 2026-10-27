@@ -8,6 +8,7 @@ A Claude Code mod (function-hook plugin) that gives the model one read-only tool
 - The model calls the tool; the mod runs `gh` (your existing `gh auth login`) and, for the workspace shorthand, `git rev-parse HEAD`, one process at a time, and returns one JSON string.
 - Main conversation only by default: a call from a subagent is refused unless `allowSubagents` is on.
 - Off (`/pr-evidence off` or `enabled: false`): calls are refused before any process starts. Turning it off while a call is collecting makes that call return a refusal instead of evidence. (On Claude Code 2.1.310 a `/pr-evidence off` typed in the prompt box during a call is queued until the turn ends, and its "send now" shortcut interrupts the call first, which then returns with `aborted` errors; so from the prompt box, off applies to the next call.)
+- The `/pr-evidence on|off` override is also kept in the plugin's store as `mode/<session id>` (written on each change, with the time). When Claude Code moves the session to a new process (a background session moved by an upgrade, a crash and resume), the new process restores the override at session start, so an off switch stays off. A hot reload keeps the live setting and ignores the record. Records not written for 30 days are dropped at the next session start, along with any that can't be read. A store failure is ignored: the override still holds in the running process. `/clear` starts a new session id, so the override doesn't carry across it.
 - It never runs anything that writes: no `POST`/`PATCH`/`PUT`/`DELETE`, no reruns, no `workflow run`, no `pr checkout`, no `auth` commands. Every REST call is `gh api --method GET` (`gh api -f` would otherwise send POST).
 
 ## Tool input
@@ -120,6 +121,7 @@ Cut from this first version, on purpose:
 - No secret masking: logs are returned as GitHub serves them (GitHub masks registered secrets itself).
 - A snapshot can't prove nothing changed between its reads; it re-reads run headers once at the end and reports what changed.
 - `gh` rate limiting is reported, not retried.
+- A tool call in flight when the session moves to a new process is lost with that process; only the on/off override is restored.
 - The workspace shorthand relies on `gh pr view`'s own lookup of the PR for the current branch.
 - A diff, log or body cut for a limit makes `collection` `partial`, like a failed section; read `omissions` and `errors` to tell them apart.
 

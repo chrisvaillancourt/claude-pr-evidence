@@ -1,6 +1,6 @@
 // Options, the /pr-evidence command, and the tool's input. Pure: no `$`, no I/O.
 import { SHA_RE, isRepo } from './gh'
-import type { Config, Mode, Session } from '../types'
+import type { Config, Mode, ModeRecord, Session } from '../types'
 
 export const INITIAL: Session = { mode: null }
 
@@ -37,6 +37,22 @@ export function configFrom(options: Record<string, unknown>): Config {
     timeoutSeconds: clamp(options.timeoutSeconds, 10, 600, 120),
     maxOutputKiB: clamp(options.maxOutputKiB, 16, 64, 64),
   }
+}
+
+/** `$.store` keys for the per-session override: `mode/<session id>`. The store is shared by every session. */
+export const MODE_KEY_PREFIX = 'mode/'
+/** Override records not written for this long (sessions never resumed) are dropped at session start. */
+export const MODE_RECORD_TTL_MS = 30 * 24 * 60 * 60 * 1000
+
+export function modeKey(sessionId: string): string {
+  return `${MODE_KEY_PREFIX}${sessionId}`
+}
+
+/** A record read back from the store; anything else (an older version, a corrupted value) is ignored. */
+export function isModeRecord(v: unknown): v is ModeRecord {
+  if (typeof v !== 'object' || v === null) return false
+  const r = v as Record<string, unknown>
+  return (r.mode === 'on' || r.mode === 'off') && typeof r.at === 'number' && Number.isFinite(r.at)
 }
 
 export function isActive(config: Config, session: Session): boolean {

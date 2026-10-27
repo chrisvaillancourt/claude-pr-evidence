@@ -14,6 +14,12 @@ export type Session = {
   mode: Mode | null
 }
 
+/**
+ * The override as kept in `$.store` under `mode/<session id>`, so it survives the
+ * session moving to a new process (where `$.state` reads empty). `at` is refreshed on every write.
+ */
+export type ModeRecord = { mode: Mode; at: number }
+
 declare module 'claude-code' {
   interface PluginState {
     'pr-evidence': { session: Shaped<Session> }

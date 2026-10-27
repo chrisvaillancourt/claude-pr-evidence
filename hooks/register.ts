@@ -5,8 +5,21 @@ import { collect } from './collect'
 import type { Deps, RunOutcome } from './collect'
 import { fitEnvelope, withCollection } from './envelope'
 import { GH_ENV, isReadOnlyArgv } from './gh'
-import { CEILINGS, INITIAL, USAGE, configFrom, isActive, parseArgs, statusText, validateInput } from './policy'
-import type { Config } from '../types'
+import {
+  CEILINGS,
+  INITIAL,
+  MODE_KEY_PREFIX,
+  MODE_RECORD_TTL_MS,
+  USAGE,
+  configFrom,
+  isActive,
+  isModeRecord,
+  modeKey,
+  parseArgs,
+  statusText,
+  validateInput,
+} from './policy'
+import type { Config, Mode } from '../types'
 
 const NAME = 'pr-evidence'
 const TOOL = 'mcp__pr-evidence__pr_evidence'
@@ -62,6 +75,47 @@ async function active($: EngineInterface): Promise<boolean> {
   return isActive(config, await update($, sessionAtom, s => s))
 }
 
+/** Writes the override through to `$.store`, so a new process can restore it; best effort. */
+async function recordMode($: EngineInterface, mode: Mode) {
+  try {
+    await $.store.set(modeKey(await $.session.id()), { mode, at: await $.clock.now() })
+  } catch {
+    // Best effort: the override still holds for this process.
+  }
+}
+
+/**
+ * In a fresh process `$.state` reads INITIAL; a record for this session id means
+ * an earlier process set the override (a background session moved by an upgrade,
+ * a crash and resume): adopt it and refresh its time. After a hot reload the state
+ * is already set and wins; the record is left alone.
+ */
+async function restoreMode($: EngineInterface) {
+  try {
+    if ((await read($, sessionAtom)).mode !== null) return
+    const record = await $.store.get(modeKey(await $.session.id()))
+    if (!isModeRecord(record)) return
+    const restored = await update($, sessionAtom, s => (s.mode === null ? { ...s, mode: record.mode } : s))
+    if (restored.mode === record.mode) await recordMode($, record.mode)
+  } catch {
+    // Best effort: without the record the configured default applies.
+  }
+}
+
+/** Drops override records other sessions left behind and never came back to, and unreadable ones. Only `mode/` keys. */
+async function pruneModes($: EngineInterface) {
+  try {
+    const cutoff = (await $.clock.now()) - MODE_RECORD_TTL_MS
+    for (const key of await $.store.keys()) {
+      if (!key.startsWith(MODE_KEY_PREFIX)) continue
+      const record = await $.store.get(key)
+      if (!isModeRecord(record) || record.at < cutoff) await $.store.delete(key)
+    }
+  } catch {
+    // Best effort.
+  }
+}
+
 /** The runner collect.ts uses: allowlist, ceilings, deadline and off switch, then `$.process.run`. */
 function runner($: EngineInterface, cwd: string, deadline: number, signal: AbortSignal): Deps & { count: () => number } {
   let count = 0
@@ -115,6 +169,8 @@ export const register: Register = (on, options) => {
   config = configFrom(options)
 
   on('session.start', async ($, e, next) => {
+    await pruneModes($)
+    await restoreMode($)
     await $.command.register({
       name: NAME,
       description: 'Show or set whether the pr_evidence tool answers in this session',
@@ -128,7 +184,10 @@ export const register: Register = (on, options) => {
   on('command.run', { command: NAME }, async ($, e) => {
     const cmd = parseArgs(e.args)
     if (cmd.kind === 'help') return { text: cmd.error ? `${cmd.error}\n${USAGE}` : USAGE }
-    if (cmd.kind === 'set') await update($, sessionAtom, s => ({ ...s, mode: cmd.mode }))
+    if (cmd.kind === 'set') {
+      await update($, sessionAtom, s => ({ ...s, mode: cmd.mode }))
+      await recordMode($, cmd.mode)
+    }
     return { text: statusText(config, await read($, sessionAtom)) }
   })
 
